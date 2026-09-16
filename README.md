@@ -38,9 +38,11 @@ offers:
 ```
 extension/          MV3 extension (manifest rendered by install.sh)
   manifest.json.in  template — @@KEY@@ is replaced with your RSA public key
-  background.js     owns a single native-messaging port, routes probe/download/cancel
+  background-2.js   owns a single native-messaging port, routes probe/download/cancel (filename versioned! see Troubleshooting)
   popup.{html,css,js}  toolbar popup
-  options.{html,js}    defaults (output dir, resolutions, subtitle defaults)
+  options.{html,css,js} defaults (output dir, resolutions, subtitle defaults)
+  theme.{js,css}       live Omarchy theme → CSS vars on :root
+  controls.js          custom select/checkbox visuals (native elements stay the source of truth)
 host/
   najm-ytdlp-host   Python native-messaging host (stdio, 4-byte LE framing)
   com.najm.ytdlp.json.tpl  host manifest template
@@ -117,6 +119,24 @@ JSON on stdio:
 - `download` → streams `start` / `progress` (pct %speed %eta) / `file` / `done`
   (a chosen `formatId` downloads that exact stream instead of re-deriving)
 - `cancel` → terminates the running yt-dlp process
+- `theme` → read-only snapshot of the live Omarchy theme (theme name, resolved
+  font family + radius, raw `colors` and `shell` token dicts), read from the
+  same files the Quickshell shell uses
+  (`~/.local/state/omarchy/current/theme/` + the machine-level
+  `~/.config/omarchy/shell.toml` overlay). The popup/options pages resolve
+  these tokens client-side in `extension/theme.js`, so the extension recolors
+  when you run `omarchy theme set ...`. `colors.toml`'s `mode` (dark/light)
+  drives `--color-scheme`.
+
+  The static Solitude palette lives in **one** place — `theme.css` `:root` —
+  as the first-paint/no-JS guard. `theme.js` holds no palette literals: it
+  reads its fallback tokens from the computed `:root` styles at apply time
+  (`readFallbacks()`), so a live theme only overrides tokens it provides and
+  no second palette copy can drift. If the live theme can't be fetched the
+  popup header shows `solitude · offline` (reason in
+  `data-theme-error`). There is no Chromium API to read the browser's own theme
+  (`browser.theme` is Firefox-only), so this host round-trip is the only way to
+  get the real palette.
 
 Progress also drives the Quickshell OSD (`omarchy-osd`, throttled ~4/sec,
 same glyphs as the default Download Video) and completion/failure toasts use
@@ -132,6 +152,15 @@ whitelist-validated.
 
 - Extension not in the toolbar after restart → `chrome://extensions` must show
   "Najm Downloader"; re-run `./install.sh` and restart again.
+- Popup header reads **`solitude · offline`** → `getTheme` failed (or the SW is
+  stale). Full error is in `documentElement.dataset.themeError` / the popup
+  console (`[theme] getTheme failed: …`). If it follows `omarchy theme set …`
+  for no one, suspect the cached service worker:
+  `chrome://extensions` → reload "Najm Downloader", or fully quit the browser
+  (a window close can leave background processes keeping the old SW alive).
+  Chromium caches MV3 service workers for `--load-extension` extensions, so SW
+  changes also need the filename bumped (`background-2.js` → `background-3.js`)
+  before reload — same trick as the Omarchy `copy-url` extension.
 - Host status dot red in the popup → the native host wasn't found. Verify
   `com.najm.ytdlp.json` exists in the browser's `NativeMessagingHosts`, the
   `path` and `allowed_origins` are correct, and you restarted after install.

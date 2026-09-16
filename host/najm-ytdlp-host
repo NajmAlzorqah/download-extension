@@ -47,6 +47,18 @@ RE_RATELIMIT = re.compile(r"429|too many requests|rate.?limit(?:ing|ed|s)?", re.
 
 MERGE_CONTAINERS = ("best", "mp4", "webm", "mkv", "mov", "flv", "ogg", "avi")
 
+# Live Omarchy theme, read from the same source of truth the Quickshell shell
+# uses (~/.local/state/omarchy/current/theme + the machine-level shell.toml
+# override layered on top). Read-only; values are whitelist-regexed on output.
+THEME_STATE_DIR = os.path.expanduser("~/.local/state/omarchy/current/theme")
+USER_SHELL_TOML = os.path.expanduser("~/.config/omarchy/shell.toml")
+MAX_THEME_VALUE = 200
+RE_TOML_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
+RE_TOML_SAFE = re.compile(r"^[A-Za-z0-9_#().,/\- ]+$")
+RE_THEME_NAME = re.compile(r"^[A-Za-z0-9 _-]{1,80}$")
+RE_FONT_NAME = re.compile(r"^[A-Za-z0-9 _.#()-]{1,80}$")
+RE_THEME_MODE = re.compile(r"^(dark|light)$")
+
 # Omarchy tooling, reachable via PATH or the standard repo layout.
 OMARCHY_BIN = os.environ.get("OMARCHY_PATH")
 OMARCHY_BIN = os.path.join(OMARCHY_BIN, "bin") if OMARCHY_BIN else "/usr/share/omarchy/bin"
@@ -125,6 +137,116 @@ def clean(s, limit=2000):
     if not s or len(s) > limit:
         return None
     return s
+
+
+def _read_utf8(path):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def _parse_colors(text):
+    """colors.toml: top-level `key = "#hex"` (quote optional), shell-style."""
+    out = {}
+    for line in text.splitlines():
+        m = re.match(r'^\s*([A-Za-z0-9_-]+)\s*=\s*["\']?(#[0-9A-Fa-f]{6})', line)
+        if not m or not RE_TOML_KEY.match(m.group(1)):
+            continue
+        out[m.group(1)] = m.group(2).lower()
+    return out
+
+
+def _parse_toml_lite(text):
+    """shell.toml: `[section]` + `key = value`, mirroring the shell's parseShell.
+
+    Values are quoted strings, bare numbers/widths, or bare keywords; the
+    flattened key is `section.key`. Everything echoed is whitelist-validated.
+    """
+    parsed = {}
+    section = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        sm = re.match(r"^\[([A-Za-z0-9_-]+)\]\s*(#.*)?$", line)
+        if sm:
+            section = sm.group(1)
+            continue
+        m = (re.match(r'^([A-Za-z0-9_-]+)\s*=\s*"([^"]+)"\s*(#.*)?$', line)
+             or re.match(r"^([A-Za-z0-9_-]+)\s*=\s*'([^']+)'\s*(#.*)?$", line)
+             or re.match(r"^([A-Za-z0-9_-]+)\s*=\s*(-?\d+(?:\.\d+)?(?:\s+-?\d+(?:\.\d+)?){0,3})\s*(#.*)?$", line)
+             or re.match(r"^([A-Za-z0-9_-]+)\s*=\s*([A-Za-z][A-Za-z0-9_-]*)\s*(#.*)?$", line))
+        if not m or not section:
+            continue
+        key, value = m.group(1), m.group(2)
+        if not RE_TOML_KEY.match(key):
+            continue
+        if not value or len(value) > MAX_THEME_VALUE or not RE_TOML_SAFE.match(value):
+            continue
+        parsed[section + "." + key] = value
+    return parsed
+
+
+def _hyprctl_rounding():
+    try:
+        proc = subprocess.run(
+            ["hyprctl", "-j", "getoption", "decoration:rounding"],
+            capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        n = int(json.loads(proc.stdout).get("int"))
+    except (ValueError, TypeError):
+        return None
+    return n if 0 <= n <= 64 else None
+
+
+def _fc_match_mono():
+    try:
+        proc = subprocess.run(
+            ["fc-match", "-f", "%{family[0]}", "monospace"],
+            capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    name = proc.stdout.strip()
+    return name if name and RE_FONT_NAME.match(name) else None
+
+
+def read_theme():
+    """Return the live Omarchy theme as {name, radius, fontFamily, colors, shell}."""
+    if not os.path.isdir(THEME_STATE_DIR):
+        return None
+    colors_text = _read_utf8(os.path.join(THEME_STATE_DIR, "colors.toml"))
+    colors = _parse_colors(colors_text)
+    if not colors:
+        return None
+    shell = _parse_toml_lite(_read_utf8(os.path.join(THEME_STATE_DIR, "shell.toml")))
+    shell.update(_parse_toml_lite(_read_utf8(USER_SHELL_TOML)))
+    theme = {
+        "name": None,
+        "mode": None,
+        "radius": None,
+        "fontFamily": None,
+        "colors": colors,
+        "shell": shell,
+    }
+    name = _read_utf8(os.path.join(os.path.dirname(THEME_STATE_DIR), "theme.name")).strip()
+    if RE_THEME_NAME.match(name):
+        theme["name"] = name
+    mm = re.search(r'^\s*mode\s*=\s*"(dark|light)"', colors_text, re.M)
+    if mm and RE_THEME_MODE.match(mm.group(1)):
+        theme["mode"] = mm.group(1)
+    radius = _hyprctl_rounding()
+    if radius is not None:
+        theme["radius"] = radius
+    family = _fc_match_mono()
+    if family:
+        theme["fontFamily"] = family
+    return theme
 
 
 def run_probe(url):
@@ -808,6 +930,14 @@ def main():
                 continue
             set_busy(True)
             threading.Thread(target=download_worker, args=(req, frame), daemon=True).start()
+            continue
+
+        if action == "theme":
+            theme = read_theme()
+            if theme is None:
+                send({"req": req, "ok": False, "error": "no theme available"})
+            else:
+                send({"req": req, "ok": True, "theme": theme})
             continue
 
         send({"req": req, "ok": False, "error": "unknown action"})

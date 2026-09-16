@@ -2,79 +2,92 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <header>
-    <span class="brand">Najm Downloader</span>
-    <span id="hostDot" class="dot off" title="host status"></span>
-  </header>
+  <div class="card">
+    <header>
+      <span class="brand"><span class="glyph">&#xF0DEA;</span>Najm Downloader</span>
+      <span class="hright">
+        <span id="themeName" class="theme-name"></span>
+        <span id="hostDot" class="dot off" title="host status"></span>
+      </span>
+    </header>
 
-  <section>
-    <label>Video URL</label>
-    <div class="row">
-      <input id="url" type="text" placeholder="https://…" spellcheck="false">
-      <button id="probeBtn" class="ghost">Detect</button>
-    </div>
-    <div id="probeArea" hidden>
-      <div id="meta" class="meta"></div>
-      <div id="sizeRow" class="muted" hidden>Estimated size: <b id="sizeEst"></b></div>
-      <div id="probeErr" class="err" hidden></div>
-    </div>
-  </section>
-
-  <section id="opts" hidden>
-    <label>Video quality</label>
-    <select id="formatSelect" disabled></select>
-    <div id="formatHint" class="muted" hidden></div>
-
-    <label class="check">
-      <input type="checkbox" id="subsOn"> Download subtitles
-    </label>
-    <div id="subHint" class="muted" hidden></div>
-    <div id="subsOpts" hidden>
-      <label class="check sub">
-        <input type="checkbox" id="autoSubs"> Include auto-generated captions
-      </label>
-      <div class="grid2">
-        <div>
-          <label>Languages offered</label>
-          <select id="langs"></select>
-        </div>
-        <div>
-          <label>Subtitle format</label>
-          <select id="subFormat" disabled></select>
-        </div>
+    <section>
+      <h2 class="section-title">Video</h2>
+      <div class="row url">
+        <input id="url" type="text" placeholder="https://&#x2026;" spellcheck="false">
+        <button id="probeBtn" class="ghost">Detect</button>
       </div>
-      <label class="check sub"><input type="checkbox" id="convertSrt"> Convert to SRT</label>
-      <label class="check sub"><input type="checkbox" id="embed"> Embed subtitles in file</label>
-    </div>
+      <div id="probeArea" hidden>
+        <div id="meta" class="meta"></div>
+        <div id="sizeRow" class="muted" hidden>Estimated size: <b id="sizeEst"></b></div>
+        <div id="probeErr" class="err" hidden></div>
+      </div>
+    </section>
 
-    <label class="check">
-      <input type="checkbox" id="playlist"> Download entire playlist
-    </label>
+    <section id="opts" hidden>
+      <h2 class="section-title">Options</h2>
 
-    <div class="row out">
-      <label for="outDir">Save to</label>
-      <span id="outDir" class="mono"></span>
-    </div>
+      <label class="field-label" for="formatSelect">Video quality</label>
+      <select id="formatSelect" disabled></select>
+      <div id="formatHint" class="muted" hidden></div>
 
-    <button id="downloadBtn" class="primary" disabled>Download</button>
-    <button id="cancelBtn" hidden>Cancel</button>
+      <label class="check">
+        <input type="checkbox" id="subsOn"> Download subtitles
+      </label>
+      <div id="subHint" class="muted" hidden></div>
+      <div id="subsOpts" hidden>
+        <label class="check sub">
+          <input type="checkbox" id="autoSubs"> Include auto-generated captions
+        </label>
+        <div class="grid2">
+          <div>
+            <label class="field-label">Languages offered</label>
+            <select id="langs"></select>
+          </div>
+          <div>
+            <label class="field-label">Subtitle format</label>
+            <select id="subFormat" disabled></select>
+          </div>
+        </div>
+        <label class="check sub"><input type="checkbox" id="convertSrt"> Convert to SRT</label>
+        <label class="check sub"><input type="checkbox" id="embed"> Embed subtitles in file</label>
+      </div>
 
-    <div id="progress" hidden>
-      <div class="bar"><div id="barFill"></div></div>
-      <div id="pct" class="mono"></div>
-      <div id="dlSize" class="muted"></div>
-      <div id="speed" class="muted"></div>
-      <div id="msg" class="muted"></div>
-    </div>
-    <div id="warn" class="warn" hidden></div>
-  </section>
+      <label class="check">
+        <input type="checkbox" id="playlist"> Download entire playlist
+      </label>
 
-  <footer>
-    <a id="optsLink" href="#">Options</a>
-  </footer>
+      <div class="row out">
+        <label class="field-label" for="outDir">Save to</label>
+        <span id="outDir" class="mono"></span>
+      </div>
+
+      <button id="downloadBtn" class="btn primary" disabled>Download</button>
+      <button id="cancelBtn" class="btn danger" hidden>Cancel</button>
+
+      <div id="progress" hidden>
+        <div class="progress-row">
+          <div class="bar"><div id="barFill"></div></div>
+          <div id="pct" class="mono"></div>
+        </div>
+        <div id="dlSize" class="muted"></div>
+        <div id="speed" class="muted"></div>
+        <div id="msg" class="muted end"></div>
+      </div>
+      <div id="warn" class="warn" hidden></div>
+    </section>
+
+    <footer>
+      <a id="optsLink" href="#">Options &#x203A;</a>
+    </footer>
+  </div>
+
+  <script src="theme.js"></script>
+  <script src="controls.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

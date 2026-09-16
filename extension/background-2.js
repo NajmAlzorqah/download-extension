@@ -110,6 +110,8 @@ function handleHostMessage(msg) {
     } else if (pending.type === "probe") {
       state.message = msg.ok ? null : msg.error;
       pending.resolve(msg);
+    } else if (pending.type === "theme") {
+      pending.resolve(msg);
     }
   }
   emit();
@@ -134,6 +136,12 @@ function withNativePort() {
 // legitimate slow probes.
 const PROBE_TIMEOUT_MS = 200000;
 const PING_TIMEOUT_MS = 10000;
+const THEME_TIMEOUT_MS = 5000;
+
+// Live Omarchy theme, short-cached so repeated popup opens don't re-spawn
+// hyprctl/fc-match on every open.
+let themeCache = { at: 0, val: null };
+const THEME_TTL_MS = 4000;
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg.action) {
@@ -168,6 +176,37 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     case "getState":
       sendResponse({ state: { ...state } });
       return false;
+
+    case "getTheme":
+      if (themeCache.val && Date.now() - themeCache.at < THEME_TTL_MS) {
+        sendResponse({ ok: true, theme: themeCache.val });
+        return false;
+      }
+      withNativePort()
+        .then((p) => {
+          const req = nextReq();
+          const timer = setTimeout(() => {
+            if (pendings.has(req)) {
+              pendings.delete(req);
+              sendResponse({ ok: false, error: "theme timed out" });
+            }
+          }, THEME_TIMEOUT_MS);
+          pendings.set(req, {
+            type: "theme",
+            resolve: (res) => {
+              clearTimeout(timer);
+              if (res && res.ok && res.theme) {
+                themeCache = { at: Date.now(), val: res.theme };
+                sendResponse({ ok: true, theme: res.theme });
+              } else {
+                sendResponse({ ok: false, error: (res && res.error) || "theme unavailable" });
+              }
+            },
+          });
+          p.postMessage({ req, action: "theme" });
+        })
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
 
     case "probe":
       withNativePort()
