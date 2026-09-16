@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Generate the Najm Downloader toolbar/extension icons as PNGs.
 
-Dependency-free: draws a rounded blue square with a white download arrow
-into a 128px RGBA grid (4x supersampled) and writes PNGs by hand.
+Dependency-free: draws a rounded terracotta square (matching the popup
+accent `#b5562f`) with a white download arrow into a 128px RGBA grid
+(4x supersampled) and writes PNGs by hand.
 """
 import struct
 import zlib
@@ -11,7 +12,7 @@ import pathlib
 OUT = pathlib.Path(__file__).resolve().parent.parent / "extension" / "icons"
 
 S = 128
-BLUE = (26, 90, 226)
+ACCENT = (181, 86, 47)
 CORNER = 26
 
 
@@ -63,7 +64,7 @@ def png(size: int) -> bytes:
             sx = int(cx * S / size)
             sy = int(cy * S / size)
             white, a = grid[sy][sx]
-            rgb = (255, 255, 255) if white else BLUE
+            rgb = (255, 255, 255) if white else ACCENT
             rgba += bytes((int(rgb[0] * a), int(rgb[1] * a), int(rgb[2] * a), int(a * 255)))
 
     rows = b"".join(b"\x00" + bytes(rgba[y * size * 4:(y * size + size) * 4]) for y in range(size))

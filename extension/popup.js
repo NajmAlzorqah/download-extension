@@ -32,7 +32,6 @@ const el = (id) => document.getElementById(id);
 
 let prefs = { ...DEFAULTS };
 let url = "";
-let probeOpen = false;
 let probeData = null;
 
 function send(msg) {
@@ -53,7 +52,7 @@ function loadPrefs() {
     el("subsOn").checked = prefs.subsOn;
     el("autoSubs").checked = prefs.auto;
     el("subFormat").value = prefs.subFormat;
-  el("subFormat").disabled = true;
+    el("subFormat").disabled = true;
     el("convertSrt").checked = prefs.convertSrt;
     el("embed").checked = prefs.embed;
     el("playlist").checked = prefs.playlist;
@@ -90,7 +89,6 @@ function probe() {
   el("probeErr").hidden = true;
   el("meta").textContent = "Probing…";
   el("probeArea").hidden = false;
-  probeOpen = true;
 
   send({ action: "probe", url }).then((r) => {
     el("probeBtn").disabled = false;
@@ -466,11 +464,18 @@ function onHostEvent(snapshot) {
     el("downloadBtn").hidden = false;
     el("downloadBtn").disabled = false;
     el("cancelBtn").hidden = true;
-    if (snapshot.warn) setWarn(snapshot.warn);
-    el("msg").textContent =
-      (snapshot.items || []).length
-        ? `Saved ${snapshot.items.length} file(s)` + (snapshot.warn ? " — without subtitles" : "")
-        : snapshot.message || "Finished";
+    if (snapshot.message === "Cancelled") {
+      setWarn(null);
+      el("msg").textContent = (snapshot.items || []).length
+        ? `Cancelled — ${snapshot.items.length} file(s) saved so far`
+        : "Cancelled";
+    } else {
+      if (snapshot.warn) setWarn(snapshot.warn);
+      el("msg").textContent =
+        (snapshot.items || []).length
+          ? `Saved ${snapshot.items.length} file(s)` + (snapshot.warn ? " — without subtitles" : "")
+          : snapshot.message || "Finished";
+    }
   } else if (snapshot.status === "error") {
     el("progress").hidden = true;
     el("dlSize").textContent = "";

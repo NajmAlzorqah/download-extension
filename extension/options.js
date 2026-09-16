@@ -2,7 +2,7 @@ const DEFAULTS = {
   outDir: "~/Videos",
   playlist: false,
   subsOn: false,
-  auto: true,
+  auto: false,
   langs: "en",
   convertSrt: false,
   embed: false,
@@ -54,7 +54,3 @@ el("reset").addEventListener("click", async () => {
   }
   save();
 });
-
-async function send(msg) {
-  return chrome.runtime.sendMessage(msg).catch((e) => ({ ok: false, error: String(e) }));
-}

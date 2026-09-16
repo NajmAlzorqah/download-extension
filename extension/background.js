@@ -11,12 +11,12 @@ const state = {
   ffmpeg: false,
   status: "idle", // idle | probing | downloading | done | error
   req: null,
-  title: null,
   pct: null,
   speed: null,
   eta: null,
   items: [],
   message: null,
+  warn: null,
 };
 
 function emit(extra) {
@@ -72,17 +72,21 @@ function handleHostMessage(msg) {
       state.status = "done";
       state.items = msg.items || [];
       state.pct = 100;
+      state.warn = msg.warn || null;
     } else if (msg.event === "error") {
       state.status = "error";
       state.message = msg.message;
+      state.warn = null;
     } else if (msg.event === "cancelled") {
       state.status = "done";
       state.message = "Cancelled";
       state.items = msg.items || [];
+      state.warn = null;
     } else if (msg.event === "start") {
       state.status = "downloading";
       state.items = [];
       state.message = null;
+      state.warn = null;
     } else if (msg.event === "info") {
       state.message = msg.message;
     }
@@ -115,26 +119,32 @@ function nextReq() {
   return ++requestId;
 }
 
-function nativeRequest(payload) {
+function withNativePort() {
   return ensureConnected().then((p) => {
     if (!p) throw new Error("native host not available");
-    const req = nextReq();
-    p.postMessage({ req, ...payload });
-    return req;
+    return p;
   });
 }
+
+// Probe worst case in the host: run_probe(60s) + sleep(2s) + run_probe(60s)
+// for a failed-first-try playlist URL, then flat_entries(60s) + first-video
+// probe(60s) = up to 242s of subprocess waits in pathological time-out-every
+// step. Typical probes take a couple of seconds, and most real runs stay well
+// under 120s; 200s bounds a genuinely hung host without a near-miss on
+// legitimate slow probes.
+const PROBE_TIMEOUT_MS = 200000;
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg.action) {
     case "ping":
-      nativeRequest({ action: "ping" })
-        .then((req) => {
+      withNativePort()
+        .then((p) => {
+          const req = nextReq();
           pendings.set(req, {
             type: "ping",
-            resolve: (ok) => {
-              sendResponse({ ok });
-            },
+            resolve: (ok) => sendResponse({ ok }),
           });
+          p.postMessage({ req, action: "ping" });
         })
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
@@ -144,16 +154,19 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return false;
 
     case "probe":
-      nativeRequest({ action: "probe", url: msg.url })
-        .then((req) => {
+      withNativePort()
+        .then((p) => {
+          const req = nextReq();
           state.status = "probing";
           emit();
           const timer = setTimeout(() => {
             if (pendings.has(req)) {
               pendings.delete(req);
+              state.status = "idle";
+              emit();
               sendResponse({ ok: false, error: "probe timed out" });
             }
-          }, 70000);
+          }, PROBE_TIMEOUT_MS);
           pendings.set(req, {
             type: "probe",
             resolve: (res) => {
@@ -163,19 +176,26 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
               sendResponse(res);
             },
           });
+          p.postMessage({ req, action: "probe", url: msg.url });
         })
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
 
     case "download":
-      nativeRequest({ action: "download", url: msg.url, selection: msg.selection })
-        .then(() => sendResponse({ ok: true }))
+      withNativePort()
+        .then((p) => {
+          p.postMessage({ req: nextReq(), action: "download", url: msg.url, selection: msg.selection });
+          sendResponse({ ok: true });
+        })
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
 
     case "cancel":
-      nativeRequest({ action: "cancel" })
-        .then(() => sendResponse({ ok: true }))
+      withNativePort()
+        .then((p) => {
+          p.postMessage({ req: nextReq(), action: "cancel" });
+          sendResponse({ ok: true });
+        })
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
 

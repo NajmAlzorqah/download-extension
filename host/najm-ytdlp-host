@@ -41,6 +41,7 @@ RE_LANG = re.compile(r"^[a-z]{2,8}(,[a-z]{2,8})*$")
 RE_INT = re.compile(r"^[0-9]+$")
 RE_FMTID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 RE_SUB_ERROR = re.compile(r"subtitle|caption|timedtext", re.I)
+RE_RATELIMIT = re.compile(r"429|too many requests|rate.?limit(?:ing|ed|s)?", re.I)
 
 MERGE_CONTAINERS = ("best", "mp4", "webm", "mkv", "mov", "flv", "ogg", "avi")
 
@@ -469,7 +470,8 @@ def notify_done(title, filepath):
     if image:
         def _rm():
             try:
-                os.exists(image) and os.unlink(image)
+                if os.path.exists(image):
+                    os.unlink(image)
             except OSError:
                 pass
         threading.Timer(8.0, _rm).start()
@@ -512,30 +514,47 @@ def download_worker(req, payload):
         osd_progress(0)
     osd_state = {"int": -1, "ms": 0.0}
 
-    SUB_BLOCKED = ("Subtitles didn't download — the site is rate-limiting subtitle "
-                   "requests (HTTP 429). Try again in a few minutes.")
+    is_pl = (sel.get("playlist") is True and
+             ("list=" in (url or "").lower() or "/playlist" in (url or "").lower()))
+
+    SUB_RATELIMITED = ("Subtitles didn't download — the site is rate-limiting subtitle "
+                       "requests (HTTP 429). Try again in a few minutes.")
+    SUB_FAILED = ("Subtitles didn't download — the site didn't serve them. "
+                  "The video was saved without subtitles.")
+
+    lock_log = []
+
+    def _ratelimited(*texts):
+        return any(RE_RATELIMIT.search(t) for t in texts if t)
 
     def subtitle_lock_ok():
+        # "ok" subs served fine · "unknown" inconclusive (timeout or a
+        # non-subtitle failure — proceed and let the real run decide) ·
+        # "blocked" subtitle-specific failure, give up and skip subs.
         cmd, _ = build_command(url, sel, with_subs=True)
         if "--" in cmd:
             cmd.insert(cmd.index("--"), "--skip-download")
+        if is_pl and "--" in cmd:
+            i = cmd.index("--")
+            cmd[i:i] = ["--playlist-items", "1"]
         for attempt in range(3):
             try:
                 proc = subprocess.run(
                     cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                     text=True, timeout=900)
             except subprocess.TimeoutExpired:
-                return False
+                return "unknown"
             if proc.returncode == 0:
-                return True
-            stderr = proc.stderr.splitlines()
-            if not any(RE_SUB_ERROR.search(l) for l in stderr):
-                return False
+                return "ok"
+            lock_log.append(proc.stderr)
+            if not any(RE_SUB_ERROR.search(l) for l in proc.stderr.splitlines()):
+                return "unknown"
             if attempt < 2:
                 time.sleep(2 * (attempt + 1))
-        return False
+        return "blocked"
 
     def run_one(with_subs):
+        global current_proc
         nonlocal items
         cmd, out_dir = build_command(url, sel, with_subs=with_subs)
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
@@ -543,6 +562,8 @@ def download_worker(req, payload):
         current_proc = proc
         errors = []
         last_ev = [0.0]
+        titles = {}
+        last_file = [None]
         for raw in proc.stdout:
             line = RE_ANSI.sub("", raw.rstrip("\r\n")).strip()
             if not line:
@@ -582,25 +603,38 @@ def download_worker(req, payload):
                 real = resolve_file(line.split("\t", 1)[1], out_dir)
                 if real and real not in items:
                     items.append(real)
+                    last_file[0] = real
                     if not sel.get("playlist"):
                         send({"req": req, "event": "file", "filepath": real})
                 continue
+            if line.startswith("NJDP:TITLE\t"):
+                raw = line.split("\t", 1)[1].strip()
+                try:
+                    raw = json.loads(raw)
+                except (ValueError, TypeError):
+                    pass
+                t = clean(raw, 200) if isinstance(raw, str) else None
+                if t and last_file[0]:
+                    titles[last_file[0]] = t
+                    last_file[0] = None
+                continue
         proc.wait()
-        return proc.returncode, out_dir, errors
+        return proc.returncode, out_dir, errors, titles
 
     warn_subs = None
     subs_on = bool((sel.get("subs") or {}).get("on"))
-    if subs_on and not subtitle_lock_ok():
-        warn_subs = SUB_BLOCKED
-        send({"req": req, "event": "info",
-              "message": "Subtitle fetch blocked by the site (HTTP 429) — downloading video without subtitles."})
+    if subs_on:
+        lock = subtitle_lock_ok()
+        if lock == "blocked":
+            warn_subs = SUB_RATELIMITED if _ratelimited("\n".join(lock_log)) else SUB_FAILED
+            send({"req": req, "event": "info", "message": warn_subs})
 
-    rc, out_dir, errors = run_one(not warn_subs and subs_on)
+    rc, out_dir, errors, titles = run_one(warn_subs is None and subs_on)
     if rc != 0 and not items and any(RE_SUB_ERROR.search(e) for e in errors):
         send({"req": req, "event": "info",
               "message": "Subtitle fetch failed — retrying video without subtitles"})
-        warn_subs = warn_subs or SUB_BLOCKED
-        rc, out_dir, errors = run_one(False)
+        warn_subs = warn_subs or (SUB_RATELIMITED if _ratelimited("\n".join(errors)) else SUB_FAILED)
+        rc, out_dir, errors, titles = run_one(False)
 
     current_proc = None
     if cancel_flag:
@@ -620,7 +654,7 @@ def download_worker(req, payload):
     osd_close()
     send(dict({"req": req, "event": "done", "items": items}, **(warn_subs and {"warn": warn_subs} or {})))
     for p in items:
-        notify_done(os.path.basename(p), p)
+        notify_done(titles.get(p) or os.path.basename(p), p)
     set_busy(False)
 
 
