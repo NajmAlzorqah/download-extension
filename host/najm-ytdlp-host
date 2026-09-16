@@ -177,7 +177,7 @@ def filter_formats(info, duration=None):
         if not (isinstance(size, (int, float)) and size > 0):
             bitrate = f.get("tbr") or f.get("vbr") or f.get("abr")
             if isinstance(bitrate, (int, float)) and bitrate > 0 and duration and duration > 0:
-                size = int(bitrate * duration / 8)
+                size = int(bitrate * 1000 / 8 * duration)
         fmt.append({
             "id": clean(fid, 64) or "?",
             "note": clean(note, 64) or "",
