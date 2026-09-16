@@ -1,0 +1,691 @@
+#!/usr/bin/env python3
+"""Najm Downloader native messaging host.
+
+Protocol: 4-byte little-endian length prefix + UTF-8 JSON, on stdin/stdout.
+
+Requests:
+  {"req": <id>, "action": "ping"}                      -> {"req", "ok": true, "ytdlp": bool, "ffmpeg": bool}
+  {"req": <id>, "action": "probe", "url": "..."}       -> {"req", "ok": true, "meta": {...}, "formats": [...], "subs": {}, "autoSubs": {}}
+  {"req": <id>, "action": "download", "url": "...",
+   "selection": {...}}                                  -> streams {"req", "event": "progress"|"info"|"file"|"done"|"error"|"cancelled", ...}
+  {"req": <id>, "action": "cancel"}                     -> {"req", "ok": true}
+
+Security mirrors the Omarchy host: strict http(s) URL check, output
+confinement via realpath, no control characters in echoed strings, nothing
+user-controlled is ever shell-interpolated, "--" ends yt-dlp options.
+"""
+import json
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+import queue
+import threading
+import time
+import pathlib
+import tempfile
+from urllib.parse import urlparse
+
+HOST_NAME = "com.najm.ytdlp"
+YTDLP = "/usr/bin/yt-dlp"
+FFMPEG = "/usr/bin/ffmpeg"
+DEFAULT_DIR = os.path.expanduser("~/Videos")
+MAX_FRAME = 1 << 20
+MAX_URL = 32768
+
+RE_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+RE_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+RE_LANG = re.compile(r"^[a-z]{2,8}(,[a-z]{2,8})*$")
+RE_INT = re.compile(r"^[0-9]+$")
+RE_FMTID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+RE_SUB_ERROR = re.compile(r"subtitle|caption|timedtext", re.I)
+
+MERGE_CONTAINERS = ("best", "mp4", "webm", "mkv", "mov", "flv", "ogg", "avi")
+
+# Omarchy tooling, reachable via PATH or the standard repo layout.
+OMARCHY_BIN = os.environ.get("OMARCHY_PATH")
+OMARCHY_BIN = os.path.join(OMARCHY_BIN, "bin") if OMARCHY_BIN else "/usr/share/omarchy/bin"
+
+
+def omarchy_tool(name):
+    found = shutil.which(name)
+    if found:
+        return found
+    cand = os.path.join(OMARCHY_BIN, name)
+    return cand if os.path.isfile(cand) else None
+
+
+OSD_ICON_DOWNLOAD = "󰇚"
+OSD_ICON_DONE = "󰄬"
+OSD_ICON_FAIL = "󰅖"
+
+SEND_LOCK = threading.Lock()
+
+# Download worker / cancel coordination.
+STATE_LOCK = threading.Lock()
+busy = False
+current_proc = None
+cancel_flag = False
+
+
+def send(obj):
+    data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+    with SEND_LOCK:
+        sys.stdout.buffer.write(struct.pack("<I", len(data)))
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+
+
+def set_busy(v):
+    global busy
+    with STATE_LOCK:
+        busy = v
+
+
+def read_frame(stream):
+    raw = stream.read(4)
+    if not raw or len(raw) < 4:
+        return None
+    (n,) = struct.unpack("<I", raw)
+    if n <= 0 or n > MAX_FRAME:
+        return None
+    data = stream.read(n)
+    if len(data) != n:
+        return None
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+
+
+def http_url(url):
+    if not isinstance(url, str) or not url or len(url) > MAX_URL:
+        return None
+    u = url.strip()
+    try:
+        parsed = urlparse(u)
+    except ValueError:
+        return None
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return None
+    return u
+
+
+def clean(s, limit=2000):
+    if not isinstance(s, str):
+        return None
+    s = RE_ANSI.sub("", s).strip()
+    s = RE_CTRL.sub("", s)
+    if not s or len(s) > limit:
+        return None
+    return s
+
+
+def run_probe(url):
+    cmd = [YTDLP, "--no-warnings", "--quiet", "-J", "--no-playlist", "--", url]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return None, "yt-dlp probe timed out"
+    if proc.returncode != 0:
+        err = RE_CTRL.sub("", proc.stderr.decode("utf-8", "replace")).strip()
+        return None, err or "yt-dlp probe failed"
+    try:
+        info = json.loads(proc.stdout.decode("utf-8"))
+    except ValueError:
+        return None, "yt-dlp returned invalid JSON"
+    return info, None
+
+
+def flat_entries(url):
+    cmd = [YTDLP, "--no-warnings", "--quiet", "-J", "--flat-playlist",
+           "--playlist-items", "5", "--", url]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, timeout=60)
+    except subprocess.TimeoutExpired:
+        return []
+    if proc.returncode != 0:
+        return []
+    try:
+        info = json.loads(proc.stdout.decode("utf-8"))
+    except ValueError:
+        return []
+    return [e for e in (info.get("entries") or []) if isinstance(e, dict)]
+
+
+def filter_formats(info, duration=None):
+    if not duration:
+        duration = info.get("duration")
+    fmt = []
+    for f in info.get("formats") or []:
+        fid = str(f.get("format_id") or "")
+        vcodec = str(f.get("vcodec") or "none")
+        acodec = str(f.get("acodec") or "none")
+        note = str(f.get("format_note") or "")
+        if vcodec == "none" and acodec == "none":
+            continue
+        if f.get("has_drm"):
+            continue
+        if re.search(r"storyboard|live.?chat", fid) or note.lower() in (
+            "storyboard", "live chat"):
+            continue
+        height = f.get("height")
+        width = f.get("width")
+        size = f.get("filesize") or f.get("filesize_approx")
+        if not (isinstance(size, (int, float)) and size > 0):
+            bitrate = f.get("tbr") or f.get("vbr") or f.get("abr")
+            if isinstance(bitrate, (int, float)) and bitrate > 0 and duration and duration > 0:
+                size = int(bitrate * duration / 8)
+        fmt.append({
+            "id": clean(fid, 64) or "?",
+            "note": clean(note, 64) or "",
+            "height": height if isinstance(height, int) and height > 0 else None,
+            "width": width if isinstance(width, int) and width > 0 else None,
+            "fps": f.get("fps") if isinstance(f.get("fps"), (int, float)) else None,
+            "ext": clean(f.get("ext"), 16) or "",
+            "vcodec": clean(vcodec, 32) or "",
+            "acodec": clean(acodec, 32) or "",
+            "size": size if isinstance(size, (int, float)) and size > 0 else None,
+        })
+    return fmt
+
+
+def sub_formats(tables):
+    seen = []
+    for table in tables:
+        for entries in (table or {}).values():
+            for e in entries:
+                if isinstance(e, dict):
+                    ext = str(e.get("ext") or "").strip().lower()
+                    if ext and ext not in seen:
+                        seen.append(ext)
+    return seen
+
+
+def probe_info(url):
+    info, err = run_probe(url)
+    if info is None and ("list=" in (url or "").lower() or "/playlist" in (url or "").lower()):
+        time.sleep(2)
+        info, err = run_probe(url)
+    if info is None:
+        return None, err
+
+    def langs(table):
+        out = {}
+        for code, entries in (table or {}).items():
+            exts = sorted({e.get("ext") for e in entries if isinstance(e, dict)})
+            if exts:
+                out[code] = exts
+        return out
+
+    count = info.get("playlist_count")
+    meta = {
+        "title": clean(info.get("title"), 500),
+        "thumbnail": clean(info.get("thumbnail"), 2000),
+        "duration": info.get("duration")
+        if isinstance(info.get("duration"), (int, float)) else None,
+        "extractor": clean(info.get("extractor"), 64),
+        "webpage": clean(info.get("webpage_url"), 2000),
+        "is_playlist": bool(info.get("playlist_id")) or bool(count),
+        "playlist_count": count if isinstance(count, int) else None,
+    }
+    is_playlist = bool(info.get("playlist_id")) or bool(count)
+
+    formats, subs, auto_subs, sub_formats_list = [], {}, {}, []
+    if is_playlist:
+        first = None
+        for e in flat_entries(url):
+            if e.get("url") or e.get("id"):
+                first = e
+                break
+        if first:
+            target = first.get("url")
+            if not target and first.get("id"):
+                target = "https://www.youtube.com/watch?v=" + first["id"]
+            first_info, first_err = run_probe(target) if target else (None, "no target")
+            if first_info:
+                formats = filter_formats(first_info, first_info.get("duration"))
+                subs = langs(first_info.get("subtitles"))
+                auto_subs = langs(first_info.get("automatic_captions"))
+                sub_formats_list = sub_formats(
+                    (first_info.get("subtitles"), first_info.get("automatic_captions")))
+                meta["sample"] = clean(first.get("title") or first.get("id") or first_err, 160)
+            else:
+                meta["sample_error"] = True
+    else:
+        formats = filter_formats(info, info.get("duration"))
+        subs = langs(info.get("subtitles"))
+        auto_subs = langs(info.get("automatic_captions"))
+        sub_formats_list = sub_formats(
+            (info.get("subtitles"), info.get("automatic_captions")))
+
+    return {
+        "meta": meta,
+        "formats": formats,
+        "subs": subs,
+        "autoSubs": auto_subs,
+        "subFormats": sub_formats_list,
+    }, None
+
+
+# ---------------------------------------------------------------- download --
+
+def resolve_file(candidate, out_dir):
+    if not isinstance(candidate, str) or not candidate:
+        return None
+    if RE_CTRL.search(candidate):
+        return None
+    p = pathlib.Path(candidate)
+    if not p.is_file():
+        return None
+    try:
+        real = os.path.realpath(candidate)
+    except OSError:
+        return None
+    base = os.path.realpath(out_dir)
+    head = base if base.endswith(os.sep) else base + os.sep
+    if not real.startswith(head):
+        return None
+    return real
+
+
+def build_command(url, sel, with_subs=True):
+    out_dir = sel.get("outputDir")
+    if not isinstance(out_dir, str) or not out_dir.replace("/", "").strip():
+        out_dir = DEFAULT_DIR
+    out_dir = os.path.expanduser(out_dir)
+    os.makedirs(out_dir, exist_ok=True)
+
+    playlist = sel.get("playlist") is True
+    is_pl = playlist and ("list=" in (url or "").lower() or "/playlist" in (url or "").lower())
+    audio_only = sel.get("audioOnly") is True
+    audio_fmt = sel.get("audioFmt")
+    if audio_fmt not in ("best", "m4a", "mp3", "opus"):
+        audio_fmt = "best"
+
+    format_id = sel.get("formatId")
+    if not isinstance(format_id, str) or not RE_FMTID.fullmatch(format_id):
+        format_id = None
+    format_has_audio = format_id is not None and sel.get("formatHasAudio") is True
+
+    cmd = [YTDLP, "--newline", "--progress", "--no-warnings"]
+    cmd += ["--yes-playlist"] if is_pl else ["--no-playlist"]
+    if is_pl:
+        cmd += ["--ignore-errors"]
+
+    if audio_only:
+        if format_id is not None:
+            fsel = format_id
+        else:
+            fsel = "ba/b"
+        cmd += ["-f", fsel]
+        cmd += ["-x", "--audio-format", audio_fmt]
+        out_tpl = (
+            "%(playlist_title)s/%(playlist_index)03d_%(title)s.%(ext)s"
+            if is_pl else "%(title)s.%(ext)s"
+        )
+    else:
+        merge_ext = ""
+        if format_id is not None:
+            if format_has_audio:
+                fsel = format_id
+            else:
+                ext = sel.get("formatExt")
+                ext = ext.lower() if isinstance(ext, str) else ""
+                if ext in MERGE_CONTAINERS and ext != "best":
+                    fsel = f"{format_id}+ba[ext={ext}]/{format_id}+ba/b"
+                    merge_ext = ext
+                else:
+                    fsel = format_id + "+ba/b"
+            if is_pl:
+                fsel += "/bv*+ba/b"
+            cmd += ["-f", fsel]
+            if merge_ext:
+                cmd += ["--merge-output-format", merge_ext]
+        else:
+            res = sel.get("resolution")
+            res = str(res).strip() if res is not None else "best"
+            if res == "best" or res == "" or RE_INT.fullmatch(res) is None:
+                cmd += ["-f", "bv*+ba/b"]
+            else:
+                h = max(1, min(int(res), 4320))
+                cap = f"[height<={h}]"
+                cmd += ["-f", f"bv*{cap}+ba/b{cap}"]
+        container = sel.get("container")
+        if container not in MERGE_CONTAINERS:
+            container = "best"
+        if container != "best":
+            cmd += ["--merge-output-format", container]
+        out_tpl = (
+            "%(playlist_title)s/%(playlist_index)03d_%(title)s.%(ext)s"
+            if is_pl else "%(title)s.%(ext)s"
+        )
+
+    cmd += ["--paths", out_dir, "-o", out_tpl]
+
+    AUTO_ALL = "en"
+    if with_subs:
+        subs = sel.get("subs") or {}
+        if subs.get("on") is True:
+            cmd += ["--write-subs"]
+            if subs.get("auto") is True:
+                cmd += ["--write-auto-subs"]
+            langs = subs.get("langs")
+            if langs == "all" or not (isinstance(langs, str) and RE_LANG.fullmatch(langs)):
+                langs = AUTO_ALL if (subs.get("auto") is True) else "all"
+            cmd += ["--sub-langs", langs]
+            sub_fmt = subs.get("subFormat")
+            if not (isinstance(sub_fmt, str) and RE_LANG.fullmatch(sub_fmt) and len(sub_fmt) <= 12):
+                sub_fmt = "best/srt"
+            cmd += ["--sub-format", sub_fmt]
+            convert = subs.get("convert")
+            if sub_fmt == "srt":
+                convert = "srt"
+            if convert in ("srt", "vtt"):
+                cmd += ["--convert-subs", convert]
+            if subs.get("embed") is True:
+                cmd += ["--embed-subs", "--embed-metadata"]
+
+    cmd += [
+        "--progress-template",
+        "download:NJDP:PCT\t%(progress._percent_str)s\t%(progress._speed_str)s\t%(progress._eta_str)s\t%(progress.downloaded_bytes)s\t%(progress.total_bytes|total_bytes_estimate)s",
+        "--print", "after_move:NJDP:FILE\t%(filepath)s",
+        "--print", "after_move:NJDP:TITLE\t%(title)j",
+        "--",
+        url,
+    ]
+    return cmd, out_dir
+
+
+def osd_available():
+    return not os.environ.get("NDLP_NO_OMARCHY") and omarchy_tool("omarchy-osd") is not None
+
+
+def osd_progress(pct_int):
+    tool = omarchy_tool("omarchy-osd")
+    if not tool or os.environ.get("NDLP_NO_OMARCHY"):
+        return
+    try:
+        subprocess.run(
+            [tool, "-i", OSD_ICON_DOWNLOAD, "-p", str(pct_int), "-d", "8000"],
+            check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def osd_close():
+    tool = omarchy_tool("omarchy-shell")
+    if not tool or os.environ.get("NDLP_NO_OMARCHY"):
+        return
+    try:
+        subprocess.run([tool, "-q", "osd", "close"],
+                       check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def notify_done(title, filepath):
+    if not os.path.isfile(filepath):
+        return
+    image = None
+    if os.path.exists(FFMPEG):
+        fd, preview = tempfile.mkstemp(suffix=".jpg")
+        os.close(fd)
+        try:
+            crop = "crop='min(iw,ih)':'min(iw,ih)',scale=256:256"
+            subprocess.run(
+                [FFMPEG, "-y", "-i", filepath, "-ss", "00:00:00.1",
+                 "-vframes", "1", "-vf", crop, "-q:v", "2", preview, "-loglevel", "quiet"],
+                check=False, timeout=30)
+            if os.path.getsize(preview) == 0:
+                os.unlink(preview)
+                preview = None
+        except Exception:
+            preview = None
+        image = preview or None
+
+    omarchy_send = omarchy_tool("omarchy-notification-send")
+    if omarchy_send and not os.environ.get("NDLP_NO_OMARCHY"):
+        args = [omarchy_send, "-g", OSD_ICON_DONE, "Download complete", title, "-t", "10000"]
+        if image:
+            args += ["--image", image]
+        args += ["--exec", "mpv", "--", filepath]
+        try:
+            subprocess.run(args, check=False, timeout=15)
+        except Exception:
+            pass
+    else:
+        args = ["notify-send", "-a", "Najm Downloader", "-t", "10000"]
+        if image:
+            args += ["-i", image]
+        args += [title, "Download complete", "--action=play=Play with mpv"]
+        try:
+            subprocess.run(args, check=False, timeout=15)
+        except Exception:
+            pass
+
+    if image:
+        def _rm():
+            try:
+                os.exists(image) and os.unlink(image)
+            except OSError:
+                pass
+        threading.Timer(8.0, _rm).start()
+
+
+def notify_error(message):
+    if not isinstance(message, str) or not message:
+        return
+    msg = clean(message, 300) or "Download failed"
+    omarchy_send = omarchy_tool("omarchy-notification-send")
+    if omarchy_send and not os.environ.get("NDLP_NO_OMARCHY"):
+        try:
+            subprocess.run(
+                [omarchy_send, "-u", "critical", "-g", OSD_ICON_FAIL, "Download failed", msg],
+                check=False, timeout=15)
+        except Exception:
+            pass
+        return
+    try:
+        subprocess.run(["notify-send", "-a", "Najm Downloader", "-u", "critical",
+                        "Download failed", msg], check=False, timeout=15)
+    except Exception:
+        pass
+
+
+def download_worker(req, payload):
+    global current_proc, cancel_flag
+    url = http_url(payload.get("url"))
+    if url is None:
+        send({"req": req, "event": "error", "message": "Unsupported URL"})
+        set_busy(False)
+        return
+    sel = payload.get("selection")
+    if not isinstance(sel, dict):
+        sel = {}
+
+    send({"req": req, "event": "start"})
+    items = []
+    if osd_available():
+        osd_progress(0)
+    osd_state = {"int": -1, "ms": 0.0}
+
+    SUB_BLOCKED = ("Subtitles didn't download — the site is rate-limiting subtitle "
+                   "requests (HTTP 429). Try again in a few minutes.")
+
+    def subtitle_lock_ok():
+        cmd, _ = build_command(url, sel, with_subs=True)
+        if "--" in cmd:
+            cmd.insert(cmd.index("--"), "--skip-download")
+        for attempt in range(3):
+            try:
+                proc = subprocess.run(
+                    cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                    text=True, timeout=900)
+            except subprocess.TimeoutExpired:
+                return False
+            if proc.returncode == 0:
+                return True
+            stderr = proc.stderr.splitlines()
+            if not any(RE_SUB_ERROR.search(l) for l in stderr):
+                return False
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
+        return False
+
+    def run_one(with_subs):
+        nonlocal items
+        cmd, out_dir = build_command(url, sel, with_subs=with_subs)
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=subprocess.STDOUT, text=True, bufsize=1)
+        current_proc = proc
+        errors = []
+        last_ev = [0.0]
+        for raw in proc.stdout:
+            line = RE_ANSI.sub("", raw.rstrip("\r\n")).strip()
+            if not line:
+                continue
+            if line.startswith("ERROR:"):
+                errors.append(line[6:].strip()[:500])
+                continue
+            if line.startswith("NJDP:PCT\t"):
+                parts = line.split("\t")
+                try:
+                    pct = float(parts[1].replace("%", "").strip())
+                except (IndexError, ValueError):
+                    continue
+                speed = clean(parts[2]) if len(parts) > 2 else None
+                eta = clean(parts[3]) if len(parts) > 3 else None
+                def _n(i):
+                    try:
+                        v = int(float(parts[i].strip().replace(",", "")))
+                        return v if v > 0 else None
+                    except (IndexError, ValueError):
+                        return None
+                downloaded = _n(4)
+                total = _n(5)
+                now = time.monotonic()
+                if now - last_ev[0] >= 0.25:
+                    last_ev[0] = now
+                    send({"req": req, "event": "progress",
+                          "pct": round(pct, 1), "speed": speed, "eta": eta,
+                          "downloaded": downloaded, "total": total})
+                if osd_available():
+                    ipct = int(pct)
+                    if ipct != osd_state["int"] and now - osd_state["ms"] >= 0.25:
+                        osd_state["int"], osd_state["ms"] = ipct, now
+                        osd_progress(ipct)
+                continue
+            if line.startswith("NJDP:FILE\t"):
+                real = resolve_file(line.split("\t", 1)[1], out_dir)
+                if real and real not in items:
+                    items.append(real)
+                    if not sel.get("playlist"):
+                        send({"req": req, "event": "file", "filepath": real})
+                continue
+        proc.wait()
+        return proc.returncode, out_dir, errors
+
+    warn_subs = None
+    subs_on = bool((sel.get("subs") or {}).get("on"))
+    if subs_on and not subtitle_lock_ok():
+        warn_subs = SUB_BLOCKED
+        send({"req": req, "event": "info",
+              "message": "Subtitle fetch blocked by the site (HTTP 429) — downloading video without subtitles."})
+
+    rc, out_dir, errors = run_one(not warn_subs and subs_on)
+    if rc != 0 and not items and any(RE_SUB_ERROR.search(e) for e in errors):
+        send({"req": req, "event": "info",
+              "message": "Subtitle fetch failed — retrying video without subtitles"})
+        warn_subs = warn_subs or SUB_BLOCKED
+        rc, out_dir, errors = run_one(False)
+
+    current_proc = None
+    if cancel_flag:
+        osd_close()
+        send({"req": req, "event": "cancelled", "items": items})
+        cancel_flag = False
+        set_busy(False)
+        return
+    if rc != 0 and not items:
+        msg = errors[0] if errors else "yt-dlp failed"
+        msg = clean(msg, 400) or "yt-dlp failed"
+        osd_close()
+        notify_error(msg)
+        send({"req": req, "event": "error", "message": msg})
+        set_busy(False)
+        return
+    osd_close()
+    send(dict({"req": req, "event": "done", "items": items}, **(warn_subs and {"warn": warn_subs} or {})))
+    for p in items:
+        notify_done(os.path.basename(p), p)
+    set_busy(False)
+
+
+# ------------------------------------------------------------------- main ---
+
+def main():
+    global current_proc, cancel_flag, busy
+    requests = queue.Queue()
+
+    def reader():
+        while True:
+            frame = read_frame(sys.stdin.buffer)
+            if frame is None:
+                requests.put(None)
+                return
+            requests.put(frame)
+
+    threading.Thread(target=reader, daemon=True).start()
+
+    while True:
+        frame = requests.get()
+        if frame is None:
+            break
+        req = frame.get("req")
+        action = frame.get("action")
+
+        if action == "cancel":
+            with STATE_LOCK:
+                proc = current_proc
+                cancel_flag = True
+            if proc is not None:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+            send({"req": req, "ok": True})
+            continue
+
+        if action == "ping":
+            send({"req": req, "ok": True, "host": HOST_NAME,
+                  "ytdlp": os.path.exists(YTDLP), "ffmpeg": os.path.exists(FFMPEG)})
+            continue
+
+        if action == "probe":
+            url = http_url(frame.get("url"))
+            if url is None:
+                send({"req": req, "ok": False, "error": "Unsupported URL"})
+                continue
+            result, err = probe_info(url)
+            if result is None:
+                send({"req": req, "ok": False, "error": err or "probe failed"})
+            else:
+                send({"req": req, "ok": True, **result})
+            continue
+
+        if action == "download":
+            if busy:
+                send({"req": req, "event": "error", "message": "A download is already running"})
+                continue
+            set_busy(True)
+            threading.Thread(target=download_worker, args=(req, frame), daemon=True).start()
+            continue
+
+        send({"req": req, "ok": False, "error": "unknown action"})
+
+
+if __name__ == "__main__":
+    main()

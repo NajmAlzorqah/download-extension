@@ -1,0 +1,13 @@
+# secrets / keys — install.sh regenerates a fresh key (new extension id)
+host/najm-ytdlp-key.pem
+
+# generated at install time from manifest.json.in
+extension/manifest.json
+
+# python
+__pycache__/
+*.pyc
+
+# env / local config
+.env
+.env.*

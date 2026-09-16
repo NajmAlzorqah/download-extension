@@ -1,0 +1,80 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <span class="brand">Najm Downloader</span>
+    <span id="hostDot" class="dot off" title="host status"></span>
+  </header>
+
+  <section>
+    <label>Video URL</label>
+    <div class="row">
+      <input id="url" type="text" placeholder="https://…" spellcheck="false">
+      <button id="probeBtn" class="ghost">Detect</button>
+    </div>
+    <div id="probeArea" hidden>
+      <div id="meta" class="meta"></div>
+      <div id="sizeRow" class="muted" hidden>Estimated size: <b id="sizeEst"></b></div>
+      <div id="probeErr" class="err" hidden></div>
+    </div>
+  </section>
+
+  <section id="opts" hidden>
+    <label>Video quality</label>
+    <select id="formatSelect" disabled></select>
+    <div id="formatHint" class="muted" hidden></div>
+
+    <label class="check">
+      <input type="checkbox" id="subsOn"> Download subtitles
+    </label>
+    <div id="subHint" class="muted" hidden></div>
+    <div id="subsOpts" hidden>
+      <label class="check sub">
+        <input type="checkbox" id="autoSubs"> Include auto-generated captions
+      </label>
+      <div class="grid2">
+        <div>
+          <label>Languages offered</label>
+          <select id="langs"></select>
+        </div>
+        <div>
+          <label>Subtitle format</label>
+          <select id="subFormat" disabled></select>
+        </div>
+      </div>
+      <label class="check sub"><input type="checkbox" id="convertSrt"> Convert to SRT</label>
+      <label class="check sub"><input type="checkbox" id="embed"> Embed subtitles in file</label>
+    </div>
+
+    <label class="check">
+      <input type="checkbox" id="playlist"> Download entire playlist
+    </label>
+
+    <div class="row out">
+      <label for="outDir">Save to</label>
+      <span id="outDir" class="mono"></span>
+    </div>
+
+    <button id="downloadBtn" class="primary" disabled>Download</button>
+    <button id="cancelBtn" hidden>Cancel</button>
+
+    <div id="progress" hidden>
+      <div class="bar"><div id="barFill"></div></div>
+      <div id="pct" class="mono"></div>
+      <div id="dlSize" class="muted"></div>
+      <div id="speed" class="muted"></div>
+      <div id="msg" class="muted"></div>
+    <div id="warn" class="warn" hidden></div>
+    </div>
+  </section>
+
+  <footer>
+    <a id="optsLink" href="#">Options</a>
+  </footer>
+  <script src="popup.js"></script>
+</body>
+</html>
