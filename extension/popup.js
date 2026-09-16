@@ -33,6 +33,7 @@ const el = (id) => document.getElementById(id);
 let prefs = { ...DEFAULTS };
 let url = "";
 let probeData = null;
+let playlistTouched = false;
 
 function send(msg) {
   return chrome.runtime.sendMessage(msg).catch((e) => ({ ok: false, error: String(e) }));
@@ -363,9 +364,11 @@ function renderProbe(r) {
     (tag.length ? `<span class="tag">${tag.map(escapeHtml).join(" · ")}</span>` : "");
 
   if (meta.is_playlist) {
-    el("playlist").checked = true;
-    prefs.playlist = true;
-  } else {
+    if (!playlistTouched) {
+      el("playlist").checked = true;
+      prefs.playlist = true;
+    }
+  } else if (!playlistTouched) {
     el("playlist").checked = false;
     prefs.playlist = false;
   }
@@ -443,9 +446,7 @@ function setWarn(msg) {
 }
 
 function onHostEvent(snapshot) {
-  if (snapshot.status === "info") {
-    el("msg").textContent = snapshot.message || "";
-  } else if (snapshot.status === "downloading") {
+  if (snapshot.status === "downloading") {
     el("progress").hidden = false;
     el("downloadBtn").hidden = true;
     el("downloadBtn").disabled = true;
@@ -470,10 +471,10 @@ function onHostEvent(snapshot) {
         ? `Cancelled — ${snapshot.items.length} file(s) saved so far`
         : "Cancelled";
     } else {
-      if (snapshot.warn) setWarn(snapshot.warn);
+      setWarn(snapshot.warn || null);
       el("msg").textContent =
         (snapshot.items || []).length
-          ? `Saved ${snapshot.items.length} file(s)` + (snapshot.warn ? " — without subtitles" : "")
+          ? `Saved ${snapshot.items.length} file(s)`
           : snapshot.message || "Finished";
     }
   } else if (snapshot.status === "error") {
@@ -542,7 +543,11 @@ el("formatSelect").addEventListener("change", () => {
 el("subFormat").addEventListener("change", () => savePrefs());
 el("convertSrt").addEventListener("change", () => savePrefs());
 el("embed").addEventListener("change", () => savePrefs());
-el("playlist").addEventListener("change", () => savePrefs());
+el("playlist").addEventListener("change", () => {
+  playlistTouched = true;
+  prefs.playlist = el("playlist").checked;
+  savePrefs();
+});
 el("url").addEventListener("keydown", (e) => { if (e.key === "Enter") probe(); });
 el("probeBtn").addEventListener("click", probe);
 el("downloadBtn").addEventListener("click", startDownload);

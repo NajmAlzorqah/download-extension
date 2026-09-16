@@ -72,10 +72,12 @@ Editing one side without the other silently breaks progress/file tracking.
 `"unknown"` (timeout or a non-subtitle-keyword failure — the download still
 runs with subs, and the real run's retry path decides), or `"blocked"`
 (subtitle-specific failure after 3 attempts → subs are skipped). The
-"rate-limiting (HTTP 429)" warning is shown only when the captured yt-dlp
+`"rate-limiting (HTTP 429)"` warning is shown only when the captured yt-dlp
 output actually mentions 429/rate-limiting; otherwise a generic
 "didn't serve them" message is used. Playlist lock probes are capped with
-`--playlist-items 1` so they don't crawl the whole playlist.
+`--playlist-items 1` so they don't crawl the whole playlist. The lock probe is
+cancellable, runs in a scratch dir (discarded — no subtitle files leak into
+the output dir), and reports `"cancelled"` when the user hits Cancel mid-probe.
 
 ## Skills
 

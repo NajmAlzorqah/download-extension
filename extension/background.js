@@ -133,6 +133,7 @@ function withNativePort() {
 // under 120s; 200s bounds a genuinely hung host without a near-miss on
 // legitimate slow probes.
 const PROBE_TIMEOUT_MS = 200000;
+const PING_TIMEOUT_MS = 10000;
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   switch (msg.action) {
@@ -140,17 +141,32 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       withNativePort()
         .then((p) => {
           const req = nextReq();
+          const timer = setTimeout(() => {
+            if (pendings.has(req)) {
+              pendings.delete(req);
+              sendResponse({ ok: false, error: "ping timed out" });
+            }
+          }, PING_TIMEOUT_MS);
           pendings.set(req, {
             type: "ping",
-            resolve: (ok) => sendResponse({ ok }),
+            resolve: (ok) => {
+              clearTimeout(timer);
+              sendResponse({ ok });
+            },
           });
-          p.postMessage({ req, action: "ping" });
+          try {
+            p.postMessage({ req, action: "ping" });
+          } catch (err) {
+            clearTimeout(timer);
+            pendings.delete(req);
+            sendResponse({ ok: false, error: String(err) });
+          }
         })
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
 
     case "getState":
-      sendResponse({ state });
+      sendResponse({ state: { ...state } });
       return false;
 
     case "probe":
@@ -163,6 +179,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             if (pendings.has(req)) {
               pendings.delete(req);
               state.status = "idle";
+              state.message = null;
               emit();
               sendResponse({ ok: false, error: "probe timed out" });
             }
