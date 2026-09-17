@@ -139,6 +139,31 @@ output actually mentions 429/rate-limiting; otherwise a generic
 cancellable, runs in a scratch dir (discarded — no subtitle files leak into
 the output dir), and reports `"cancelled"` when the user hits Cancel mid-probe.
 
+## Downloading toast
+
+While a download runs the host shows an in-progress toast (summary
+`Downloading`, body = `<video name> · <pct>%`, refreshed ~1s in place via
+`-r <id>`) plus the OSD; `notify_dismiss_downloading()` removes the toast on
+every exit path before the final `notify_done`/`notify_many`/`notify_error`
+toast fires. The video name travels as `selection.title` (probe `meta.title`,
+playlist `meta.sample`) from `popup.js` → host — **not** a new `NJDP:` tag, so
+it adds no parser coupling. Toast helpers (`notify_downloading`,
+`notify_dismiss_downloading`) skip entirely under `NDLP_NO_OMARCHY` (unlike
+the end-of-download toasts, which still fall back to `notify-send`); the
+refresh is throttled via `_toast_refresh` and also runs during the subtitle
+lock probe's retry backoffs so the toast doesn't expire mid-probe.
+
+## Popup reopen behavior
+
+Popup `DOMContentLoaded` asks the host for state **before** auto-probing the
+active tab: if a download is running from a previous popup session it reopens
+as the live progress view (no fresh probe, nothing wiped). On an idle reopen it
+restores the last probe result for the exact same URL from
+`chrome.storage.session` (`lastProbe` cache written on successful probes) so
+the previously chosen options/estimate reappear instantly without a refetch;
+only a URL change or the manual Probe button triggers a new probe. The cache is
+session-scoped and lost on browser restart/extension reload.
+
 ## Skills
 
 Repo skills are vendored under `.agents/skills/` (pinned by `skills-lock.json`);

@@ -79,6 +79,27 @@ function plausibleVideoUrl(u) {
   return /^https?:\/\//i.test(u || "");
 }
 
+// Last probe result, keyed by the exact URL it was run against. Reopening the
+// popup on the same page restores the options instantly instead of re-probing;
+// the manual Probe button still always refetches.
+const PROBE_CACHE_KEY = "lastProbe";
+
+function saveProbeCache(sourceUrl, data) {
+  return chrome.storage.session
+    .set({ [PROBE_CACHE_KEY]: { url: sourceUrl, data } })
+    .catch(() => {});
+}
+
+async function loadProbeCache() {
+  try {
+    const o = await chrome.storage.session.get(PROBE_CACHE_KEY);
+    const entry = o[PROBE_CACHE_KEY];
+    return entry && entry.url && entry.data ? entry : null;
+  } catch (e) {
+    return null;
+  }
+}
+
 function probe() {
   url = el("url").value.trim();
   setWarn(null);
@@ -102,6 +123,7 @@ function probe() {
       el("meta").textContent = "";
       return;
     }
+    saveProbeCache(url, r);
     renderProbe(r);
   });
 }
@@ -449,7 +471,9 @@ function selectedFormat() {
 function buildSelection() {
   savePrefs();
   const fmt = selectedFormat();
+  const meta = probeData && probeData.meta;
   return {
+    title: (meta && (meta.sample || meta.title)) || "",
     audioOnly: fmt.audioOnly,
     formatId: fmt.formatId,
     formatHasAudio: !!fmt.formatHasAudio,
@@ -547,7 +571,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   el("opts").hidden = true;
   if (tab && tab.url && tab.url.startsWith("http")) {
     el("url").value = tab.url;
-    probe();
   }
 
   chrome.runtime.onMessage.addListener((msg) => {
@@ -556,9 +579,26 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   checkHost();
-  send({ action: "getState" }).then(({ state }) => {
-    if (state && state.status !== "idle") onHostEvent(state);
-  });
+
+  // Ask for host state first: a download already running (from a previous
+  // popup session) must reopen as the live progress view, never a fresh probe
+  // that wipes it. A same-URL reopen also restores the cached probe instead of
+  // re-fetching and forgetting the options.
+  const { state } = await send({ action: "getState" });
+  if (state && state.status === "downloading") {
+    onHostEvent(state);
+    return;
+  }
+
+  const target = el("url").value.trim();
+  if (!target) return;
+
+  const cached = await loadProbeCache();
+  if (cached && cached.url === target) {
+    renderProbe(cached.data);
+    return;
+  }
+  probe();
 });
 
 el("subsOn").addEventListener("change", (e) => {

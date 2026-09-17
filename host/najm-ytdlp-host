@@ -580,14 +580,15 @@ def osd_available():
     return not os.environ.get("NDLP_NO_OMARCHY") and omarchy_tool("omarchy-osd") is not None
 
 
-def osd_progress(pct_int):
+def osd_progress(pct_int, title=None):
     tool = omarchy_tool("omarchy-osd")
     if not tool or os.environ.get("NDLP_NO_OMARCHY"):
         return
+    args = [tool, "-i", OSD_ICON_DOWNLOAD, "-p", str(pct_int), "-d", "8000"]
+    if title:
+        args += ["-m", title]
     try:
-        subprocess.run(
-            [tool, "-i", OSD_ICON_DOWNLOAD, "-p", str(pct_int), "-d", "8000"],
-            check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(args, check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
 
@@ -598,6 +599,61 @@ def osd_close():
         return
     try:
         subprocess.run([tool, "-q", "osd", "close"],
+                       check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def notify_downloading(title, pct, ref):
+    """In-progress toast showing the video name while the download runs.
+
+    ref[0] carries the notification id: the first call prints it (-p), later
+    calls replace in place (-r <id>) so progress updates don't stack toasts.
+    title is already clean()'ed by the caller; pct is an integer percent.
+    Skips entirely under NDLP_NO_OMARCHY so hand-driving the host stays
+    silent — unlike the end-of-download toasts, which still fall back.
+    """
+    if os.environ.get("NDLP_NO_OMARCHY"):
+        return
+    body = title if pct is None else f"{title} · {pct}%"
+    omarchy_send = omarchy_tool("omarchy-notification-send")
+    if omarchy_send:
+        try:
+            if ref[0] is None:
+                proc = subprocess.run(
+                    [omarchy_send, "-g", OSD_ICON_DOWNLOAD, "Downloading", body,
+                     "-t", "10000", "-p"],
+                    capture_output=True, timeout=15)
+                out = proc.stdout.decode("utf-8", "replace").strip()
+                if proc.returncode == 0 and out.isdigit():
+                    ref[0] = out
+            else:
+                subprocess.run(
+                    [omarchy_send, "-g", OSD_ICON_DOWNLOAD, "Downloading", body,
+                     "-t", "10000", "-r", ref[0]],
+                    check=False, timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+        return
+    # Non-Omarchy fallback: one-shot toast (notify-send has no reliable id).
+    if ref[0] is None:
+        ref[0] = "sent"
+        try:
+            subprocess.run(["notify-send", "-a", "Najm Downloader", "-t", "10000",
+                            "Downloading", body], check=False, timeout=15,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+
+def notify_dismiss_downloading():
+    if os.environ.get("NDLP_NO_OMARCHY"):
+        return
+    omarchy_shell = omarchy_tool("omarchy-shell")
+    if not omarchy_shell:
+        return
+    try:
+        subprocess.run([omarchy_shell, "-q", "notifications", "dismiss", "Downloading"],
                        check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass
@@ -712,8 +768,20 @@ def download_worker(req, payload):
 
     send({"req": req, "event": "start"})
     items = []
+    title = clean(sel.get("title"), 200) if isinstance(sel.get("title"), str) else None
+    dl_toast = [None]
+    dl_toast_ms = [0.0]
+
+    def _toast_refresh(pct):
+        now = time.monotonic()
+        if title and now - dl_toast_ms[0] >= 1.0:
+            dl_toast_ms[0] = now
+            notify_downloading(title, pct, dl_toast)
+
     if osd_available():
-        osd_progress(0)
+        osd_progress(0, title)
+    if title:
+        notify_downloading(title, None, dl_toast)
     osd_state = {"int": -1, "ms": 0.0}
 
     is_pl = (sel.get("playlist") is True and
@@ -735,6 +803,8 @@ def download_worker(req, payload):
 
     def _sleep_until(delay):
         # Slice the backoff so a cancel lands in milliseconds, not seconds.
+        # A probe's retry gap is quiet for the toast — refresh it here so it
+        # doesn't expire mid-lock-probe (worst case SUB_LOCK_TIMEOUT x 3).
         end = time.monotonic() + delay
         while True:
             if _cancel_pending():
@@ -742,6 +812,7 @@ def download_worker(req, payload):
             remaining = end - time.monotonic()
             if remaining <= 0:
                 return True
+            _toast_refresh(None)
             time.sleep(min(remaining, 0.1))
 
     def subtitle_lock_ok():
@@ -843,7 +914,8 @@ def download_worker(req, payload):
                     ipct = int(pct)
                     if ipct != osd_state["int"] and now - osd_state["ms"] >= 0.25:
                         osd_state["int"], osd_state["ms"] = ipct, now
-                        osd_progress(ipct)
+                        osd_progress(ipct, title)
+                _toast_refresh(int(pct))
                 continue
             if line.startswith("NJDP:FILE\t"):
                 real = resolve_file(line.split("\t", 1)[1], out_dir)
@@ -873,6 +945,7 @@ def download_worker(req, payload):
         lock = subtitle_lock_ok()
         if lock == "cancelled":
             osd_close()
+            notify_dismiss_downloading()
             send({"req": req, "event": "cancelled", "items": items})
             cancel_flag = False
             set_busy(False)
@@ -894,6 +967,7 @@ def download_worker(req, payload):
     # just after run_one returned cleanly.
     if cancel_flag or (isinstance(rc, int) and rc < 0):
         osd_close()
+        notify_dismiss_downloading()
         send({"req": req, "event": "cancelled", "items": items})
         cancel_flag = False
         set_busy(False)
@@ -902,6 +976,7 @@ def download_worker(req, payload):
         msg = errors[0] if errors else "yt-dlp failed"
         msg = clean(msg, 400) or "yt-dlp failed"
         osd_close()
+        notify_dismiss_downloading()
         notify_error(msg)
         send({"req": req, "event": "error", "message": msg})
         set_busy(False)
@@ -926,6 +1001,7 @@ def download_worker(req, payload):
         if split_items:
             items = split_items
     osd_close()
+    notify_dismiss_downloading()
     send(dict({"req": req, "event": "done", "items": items}, **(warn_subs and {"warn": warn_subs} or {})))
     if len(items) > 1:
         notify_many(len(items), titles.get(items[0]) or "", out_dir)
