@@ -17,6 +17,7 @@ user-controlled is ever shell-interpolated, "--" ends yt-dlp options.
 import json
 import os
 import re
+import glob
 import shutil
 import struct
 import subprocess
@@ -347,6 +348,13 @@ def probe_info(url):
         return out
 
     count = info.get("playlist_count")
+
+    def chapter_count(d):
+        ch = d.get("chapters")
+        if isinstance(ch, list) and ch and all(isinstance(c, dict) for c in ch):
+            return len(ch)
+        return None
+
     meta = {
         "title": clean(info.get("title"), 500),
         "thumbnail": clean(info.get("thumbnail"), 2000),
@@ -356,6 +364,7 @@ def probe_info(url):
         "webpage": clean(info.get("webpage_url"), 2000),
         "is_playlist": bool(info.get("playlist_id")) or bool(count),
         "playlist_count": count if isinstance(count, int) else None,
+        "chapterCount": chapter_count(info),
     }
     is_playlist = bool(info.get("playlist_id")) or bool(count)
 
@@ -378,6 +387,9 @@ def probe_info(url):
                 sub_formats_list = sub_formats(
                     (first_info.get("subtitles"), first_info.get("automatic_captions")))
                 meta["sample"] = clean(first.get("title") or first.get("id") or first_err, 160)
+                first_ch = first_info.get("chapters")
+                if isinstance(first_ch, list) and first_ch:
+                    meta["chapterCount"] = chapter_count(first_info)
             else:
                 meta["sample_error"] = True
     else:
@@ -415,6 +427,31 @@ def resolve_file(candidate, out_dir):
     if not real.startswith(head):
         return None
     return real
+
+
+def split_sections(main_file):
+    """Section files produced by --split-chapters next to the (kept) original.
+
+    yt-dlp >=2025 keeps the whole video and reports only the original path via
+    the after_move NJDP:FILE print, so the section files are derived from the
+    main filename (same dir + stem, then " - NN_title<ext>"). Returns [] when
+    nothing matched, so callers keep the original file as a safe fallback.
+    """
+    if not isinstance(main_file, str) or not main_file:
+        return []
+    d = os.path.dirname(main_file)
+    stem, ext = os.path.splitext(os.path.basename(main_file))
+    re_section = re.compile(
+        re.escape(stem) + r" - [0-9]{2,}_.*" + re.escape(ext) + r"\Z")
+    out = []
+    for cand in sorted(glob.glob(os.path.join(d, stem + " - [0-9][0-9]*_*" + ext))):
+        if cand == main_file:
+            continue
+        if RE_CTRL.search(cand) or not re_section.match(os.path.basename(cand)):
+            continue
+        if os.path.isfile(cand):
+            out.append(cand)
+    return out
 
 
 def build_command(url, sel, with_subs=True):
@@ -488,6 +525,20 @@ def build_command(url, sel, with_subs=True):
             "%(playlist_title)s/%(playlist_index)03d_%(title)s.%(ext)s"
             if is_pl else "%(title)s.%(ext)s"
         )
+
+    chapters = sel.get("chapters")
+    if chapters not in ("embed", "split"):
+        chapters = None
+    if chapters and not audio_only:
+        if chapters == "embed":
+            cmd += ["--embed-chapters"]
+        else:
+            cmd += ["--split-chapters"]
+            chapter_tpl = (
+                ("%(playlist_title)s/%(playlist_index)03d_%(title)s - "
+                 "%(section_number)02d_%(section_title)s.%(ext)s" if is_pl else
+                 "%(title)s - %(section_number)02d_%(section_title)s.%(ext)s"))
+            cmd += ["-o", "chapter:" + chapter_tpl]
 
     cmd += ["--paths", out_dir, "-o", out_tpl]
 
@@ -855,6 +906,25 @@ def download_worker(req, payload):
         send({"req": req, "event": "error", "message": msg})
         set_busy(False)
         return
+    if sel.get("chapters") == "split" and items:
+        # yt-dlp keeps every whole video next to its section files; drop each
+        # redundant original and report the sections as the download result.
+        split_items = []
+        for whole in items:
+            sections = split_sections(whole)
+            if not sections:
+                continue
+            try:
+                os.remove(whole)
+            except OSError:
+                pass
+            title = titles.get(whole)
+            if title:
+                for p in sections:
+                    titles[p] = title
+            split_items.extend(sections)
+        if split_items:
+            items = split_items
     osd_close()
     send(dict({"req": req, "event": "done", "items": items}, **(warn_subs and {"warn": warn_subs} or {})))
     if len(items) > 1:

@@ -1,6 +1,7 @@
 const DEFAULTS = {
   outDir: "~/Videos",
   playlist: false,
+  chapters: "off",
   subsOn: false,
   auto: false,
   langs: "en",

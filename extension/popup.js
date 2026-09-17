@@ -7,6 +7,7 @@ const DEFAULTS = {
   convertSrt: false,
   embed: false,
   playlist: false,
+  chapters: "off", // "off" | "embed" | "split"
   outDir: "~/Videos",
 };
 
@@ -57,6 +58,7 @@ function loadPrefs() {
     el("convertSrt").checked = prefs.convertSrt;
     el("embed").checked = prefs.embed;
     el("playlist").checked = prefs.playlist;
+    el("chapters").value = prefs.chapters;
     el("outDir").textContent = prefs.outDir;
   });
 }
@@ -69,6 +71,7 @@ function savePrefs() {
   prefs.convertSrt = el("convertSrt").checked;
   prefs.embed = el("embed").checked;
   prefs.playlist = el("playlist").checked;
+  prefs.chapters = el("chapters").value || "off";
   chrome.storage.local.set(prefs);
 }
 
@@ -351,11 +354,44 @@ function renderLangs() {
   renderSubFormats();
 }
 
+const CHAPTER_CONTAINERS = ["mp4", "webm", "mkv"];
+
+function chaptersControlState() {
+  const meta = probeData && probeData.meta;
+  const count = meta ? meta.chapterCount : null;
+  const fmt = selectedFormat();
+  if (!count || fmt.audioOnly) return { visible: false, enabled: false, reason: "" };
+  let ok = true;
+  let reason = "";
+  const ext = (fmt.formatExt || "").toLowerCase();
+  if (fmt.formatId && ext && !CHAPTER_CONTAINERS.includes(ext)) {
+    ok = false;
+    reason = `Chapters need MKV/MP4/WebM — this format is ${ext || "a container that can't hold them"}.`;
+  }
+  return { visible: true, enabled: ok, reason };
+}
+
+function updateChaptersControl() {
+  const wrap = el("chaptersWrap");
+  const sel = el("chapters");
+  const hint = el("chaptersHint");
+  const st = chaptersControlState();
+  wrap.hidden = !st.visible;
+  if (!st.visible) return;
+  sel.disabled = !st.enabled;
+  hint.hidden = !st.enabled;
+  hint.textContent = st.reason && !st.enabled ? st.reason : "";
+  sel.value = prefs.chapters || "off";
+  const label = wrap.querySelector(".field-label");
+  if (label) label.textContent = `Video sections (${probeData.meta.chapterCount} chapters)`;
+}
+
 function renderProbe(r) {
   probeData = r;
   const meta = r.meta || {};
   const tag = [];
   if (meta.is_playlist) tag.push("playlist" + (meta.playlist_count ? ` · ${meta.playlist_count}` : ""));
+  if (meta.chapterCount) tag.push(meta.chapterCount + " chapters");
   if (meta.duration) tag.push(Math.round(meta.duration) + "s");
   if (meta.extractor) tag.push(meta.extractor);
 
@@ -374,6 +410,7 @@ function renderProbe(r) {
   }
 
   renderFormats();
+  updateChaptersControl();
   renderLangs();
   el("opts").hidden = false;
   el("downloadBtn").disabled = false;
@@ -419,6 +456,7 @@ function buildSelection() {
     formatExt: fmt.formatExt,
     resolution: fmt.resolution,
     playlist: prefs.playlist,
+    chapters: (!el("chaptersWrap").hidden && !el("chapters").disabled) ? prefs.chapters : "off",
     subs: {
       on: prefs.subsOn && !el("subsOn").disabled,
       auto: prefs.auto,
@@ -539,10 +577,12 @@ el("langs").addEventListener("change", () => {
 el("formatSelect").addEventListener("change", () => {
   savePrefs();
   updateSizeEstimate();
+  updateChaptersControl();
 });
 el("subFormat").addEventListener("change", () => savePrefs());
 el("convertSrt").addEventListener("change", () => savePrefs());
 el("embed").addEventListener("change", () => savePrefs());
+el("chapters").addEventListener("change", () => savePrefs());
 el("playlist").addEventListener("change", () => {
   playlistTouched = true;
   prefs.playlist = el("playlist").checked;

@@ -27,6 +27,13 @@ offers:
   resolution + subtitle choices, files are numbered in exact playlist order
   (`001_Title … `) inside a folder named after the playlist, and one failed
   video doesn't abort the rest
+- **video sections (chapters)**: when the video has YouTube chapters, a
+  `Video sections` selector appears in the popup — embed them as navigable
+  chapter markers into the file (MKV/MP4/WebM) or split the video into one file
+  per section. Split downloads remove the duplicated whole-video copy
+  (`Title.webm` → `Title - 01_Intro.webm`, `Title - 02_…`). Only offered for
+  videos that actually have chapters and formats that can hold them (audio-only
+  never shows it)
 - live progress via the **Omarchy OSD** while downloading (same overlay as
   the default "Download Video"), a popup progress bar with %/speed/ETA,
   and Cancel
@@ -80,7 +87,9 @@ extensions; click the icon in the toolbar.
 1. Open a video or playlist page (or paste a URL) — the popup probes it automatically.
 2. Pick the **actual quality this video offers** — one entry per resolution
    (highest first, best codec chosen for you) plus `Audio only`; subtitle
-   language tracks the video actually offers; playlist on/off.
+   language tracks the video actually offers; playlist on/off; and, when the
+   video has chapters, a `Video sections` selector (embed as chapter markers /
+   split into one file per section).
    For a playlist, the resolutions come from the first video (or presets) and
    subtitles default to **all available**.
 3. Download; progress shows in the Omarchy OSD overlay and the popup.
@@ -113,11 +122,13 @@ The background service worker connects a native port
 JSON on stdio:
 
 - `ping` → host/yt-dlp/ffmpeg availability
-- `probe` → title, thumbnail, duration, **all real format streams** (id, size,
-  fps, ext, codecs), manual + auto subtitle language maps; for a playlist it
-  also samples the first video so the same options are real, plus entry count
+- `probe` → title, thumbnail, duration, chapter count, **all real format
+  streams** (id, size, fps, ext, codecs), manual + auto subtitle language maps;
+  for a playlist it also samples the first video so the same options are real,
+  plus entry count
 - `download` → streams `start` / `progress` (pct %speed %eta) / `file` / `done`
-  (a chosen `formatId` downloads that exact stream instead of re-deriving)
+  (a chosen `formatId` downloads that exact stream instead of re-deriving;
+  `chapters: "embed" | "split"` drives the section features)
 - `cancel` → terminates the running yt-dlp process
 - `theme` → read-only snapshot of the live Omarchy theme (theme name, resolved
   font family + radius, raw `colors` and `shell` token dicts), read from the

@@ -114,6 +114,18 @@ The read-only `theme` action follows the same rules: `colors.toml` values are
 Editing one side without the other silently breaks progress/file tracking.
 `build_command()` is also reused for the subtitle 429-retry check.
 
+**Chapters coupling:** the selection key `chapters` is `"off"|"embed"|"split"`.
+`"embed"` appends `--embed-chapters` (arguably `--embed-metadata` already
+covers it in the embed-subs path); `"split"` appends `--split-chapters` plus a
+`chapter:` output template deriving the section filename from the main template
+(`%(title)s - %(section_number)02d_%(section_title)s.%(ext)s`). yt-dlp ≥2025
+**keeps** the whole video next to the sections and reports only the original on
+`NJDP:FILE`, so `download_worker()` re-derives the section files from each
+main path (`split_sections()`, same dir + stem, ` - NN_title<ext>` naming) and
+removes the originals — keep the `chapter:` template and `split_sections()` in
+sync, or split downloads report one stale file and leave a duplicate. Split
+cleanup runs per playlist entry, not just the first file.
+
 ## Subtitle lockout
 
 `subtitle_lock_ok()` in the host is tri-state: `"ok"` (subs served fine),

@@ -61,6 +61,16 @@
         <input type="checkbox" id="playlist"> Download entire playlist
       </label>
 
+      <div id="chaptersWrap" hidden>
+        <label class="field-label" for="chapters">Video sections (chapters)</label>
+        <select id="chapters" disabled>
+          <option value="off">Don't store sections</option>
+          <option value="embed">Embed as chapter markers</option>
+          <option value="split">Split into separate files</option>
+        </select>
+        <div id="chaptersHint" class="muted" hidden></div>
+      </div>
+
       <div class="row out">
         <label class="field-label" for="outDir">Save to</label>
         <span id="outDir" class="mono"></span>
