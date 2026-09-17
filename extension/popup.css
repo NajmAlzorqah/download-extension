@@ -91,3 +91,56 @@ footer a:hover { color: var(--accent); }
 
 #downloadBtn { width: 100%; margin-top: var(--sp-10); font-size: var(--font-body); }
 #subsOpts { margin-top: var(--sp-4); }
+
+#queueSection h2 { margin-bottom: var(--sp-6); }
+#queueList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+.qrow {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-6);
+  padding: var(--sp-6) var(--sp-8);
+  background: var(--ctrl-normal-fill);
+  border: 1px solid var(--ctrl-normal-border);
+  border-radius: calc(var(--radius) - 1px);
+}
+.qpos {
+  flex: none;
+  width: 14px;
+  color: var(--fg-faint);
+  font-size: var(--font-body-small);
+  font-weight: 700;
+  text-align: center;
+}
+.qinfo { flex: 1; min-width: 0; }
+.qtitle {
+  display: block;
+  font-size: var(--font-body-small);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qopts {
+  display: block;
+  font-size: var(--font-caption);
+  color: var(--fg-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qbtns { display: flex; gap: var(--sp-2); flex: none; }
+.qbtn {
+  height: 20px;
+  min-width: 22px;
+  padding: 0 var(--sp-2);
+  font-size: var(--font-body-small);
+  line-height: 1;
+}
+.qbtn-rm:hover { color: var(--err); border-color: var(--err); }

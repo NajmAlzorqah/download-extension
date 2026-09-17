@@ -7,8 +7,19 @@ Requests:
   {"req": <id>, "action": "ping"}                      -> {"req", "ok": true, "ytdlp": bool, "ffmpeg": bool}
   {"req": <id>, "action": "probe", "url": "..."}       -> {"req", "ok": true, "meta": {...}, "formats": [...], "subs": {}, "autoSubs": {}}
   {"req": <id>, "action": "download", "url": "...",
-   "selection": {...}}                                  -> streams {"req", "event": "progress"|"info"|"file"|"done"|"error"|"cancelled", ...}
-  {"req": <id>, "action": "cancel"}                     -> {"req", "ok": true}
+   "selection": {...}}                                  -> {"req", "ok": true, "queueId": <id>}; the job either
+                                                          starts immediately or joins a FIFO queue and runs when
+                                                          the active job finishes (done, error, or cancel)
+  {"req": <id>, "action": "cancel"}                     -> {"req", "ok": true} (terminates the active job)
+  {"req": <id>, "action": "cancel", "queueId": <id>}    -> {"req", "ok": true} (removes a waiting item)
+  {"req": <id>, "action": "reorder", "queueId": <id>,
+   "newIndex": <0-based waiting index>}                 -> {"req", "ok": true} (moves a waiting item)
+  {"req": <id>, "action": "getQueue"}                   -> {"req", "ok": true, "queue": [...]} (snapshot like the queue event)
+  {"req": <id>, "action": "theme"}                      -> {"req", "ok": true, "theme": {...}} (read-only)
+
+The host broadcasts {"req": <id>, "event": "queue", "queue": [...]} (active
+item first, then waiting items) on every queue change, plus the per-active-job
+stream {"req", "event": "progress"|"info"|"file"|"done"|"error"|"cancelled"}.
 
 Security mirrors the Omarchy host: strict http(s) URL check, output
 confinement via realpath, no control characters in echoed strings, nothing
@@ -39,10 +50,11 @@ SUB_LOCK_TIMEOUT = 120
 PROBE_TIMEOUT_S = 60
 
 RE_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-RE_CTRL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+RE_CTRL = re.compile(r"[\x00-\x1f\x7f]")
 RE_LANG = re.compile(r"^[a-z]{2,8}(,[a-z]{2,8})*$")
 RE_INT = re.compile(r"^[0-9]+$")
 RE_FMTID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+RE_LABEL = re.compile(r"^[A-Za-z0-9 _.,&:()/#-]{1,80}$")
 RE_SUB_ERROR = re.compile(r"subtitle|caption|timedtext", re.I)
 RE_RATELIMIT = re.compile(r"429|too many requests|rate.?limit(?:ing|ed|s)?", re.I)
 
@@ -79,26 +91,165 @@ OSD_ICON_FAIL = "󰅖"
 
 SEND_LOCK = threading.Lock()
 
-# Download worker / cancel coordination.
+# Download queue coordination. At most one job downloads at a time
+# (`active_job`); every further `download` request is appended to `queue` and
+# promoted in FIFO order as the active job finishes (done, error, or cancel).
+# `queueId` is the job's id, assigned here and echoed back so the extension
+# can target cancel/reorder at a specific item.
 STATE_LOCK = threading.Lock()
-busy = False
+next_job_id = 1
+active_job = None
+wait_queue = []
 current_proc = None
 lock_proc = None
 cancel_flag = False
 
+# Probe coalescing: concurrent probes of the same URL share one yt-dlp run
+# (`probe_waiters`), and results are cached briefly so a re-probe of the same
+# URL right after (popup reopen churn, queue/auto-detection) isn't a fresh
+# network round-trip. The cache is bounded and TTL-bounded; failures are
+# cached too, so a dead URL isn't re-probed on every popup open.
+PROBE_CACHE_TTL = 60.0
+PROBE_CACHE_MAX = 8
+PROBE_LOCK = threading.Lock()
+probe_waiters = {}
+probe_cache = {}
+
 
 def send(obj):
     data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-    with SEND_LOCK:
-        sys.stdout.buffer.write(struct.pack("<I", len(data)))
-        sys.stdout.buffer.write(data)
-        sys.stdout.buffer.flush()
+    try:
+        with SEND_LOCK:
+            sys.stdout.buffer.write(struct.pack("<I", len(data)))
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+    except OSError:
+        # The browser-side endpoint is gone (pipe closed). Swallow it so a
+        # worker thread can't die mid-job and leave the queue wedged — the
+        # main loop exits on stdin EOF anyway.
+        pass
 
 
-def set_busy(v):
-    global busy
+def sanitize_selection(sel):
+    """Echo-safe copy of a download selection.
+
+    Every field is validated with the same whitelists build_command() uses, so
+    the copy carried in queue snapshots (and used to re-run a download after a
+    browser restart) can never smuggle anything into a later build_command()
+    call or a popup render.
+    """
+    if not isinstance(sel, dict):
+        return {}
+    out = {"audioOnly": sel.get("audioOnly") is True,
+           "playlist": sel.get("playlist") is True}
+    title = clean(sel.get("title"), 200)
+    if title:
+        out["title"] = title
+    label = sel.get("label")
+    if isinstance(label, str) and RE_LABEL.fullmatch(label):
+        out["label"] = label
+    fmt = sel.get("formatId")
+    if isinstance(fmt, str) and RE_FMTID.fullmatch(fmt):
+        out["formatId"] = fmt
+        out["formatHasAudio"] = sel.get("formatHasAudio") is True
+        ext = sel.get("formatExt")
+        # Same gate build_command() applies: only real merge containers are ever
+        # used, so a snapshot can't carry an extension that a re-run would drop.
+        if isinstance(ext, str) and len(ext) <= 16:
+            ext = ext.lower()
+            if ext in MERGE_CONTAINERS and ext != "best":
+                out["formatExt"] = ext
+    res = sel.get("resolution")
+    if isinstance(res, str) and (res == "best" or RE_INT.fullmatch(res)):
+        out["resolution"] = res
+    container = sel.get("container")
+    if container in MERGE_CONTAINERS:
+        out["container"] = container
+    afmt = sel.get("audioFmt")
+    if afmt in ("best", "m4a", "mp3", "opus"):
+        out["audioFmt"] = afmt
+    chapters = sel.get("chapters")
+    if chapters in ("off", "embed", "split"):
+        out["chapters"] = chapters
+    subs = sel.get("subs")
+    if isinstance(subs, dict):
+        s = {}
+        if subs.get("on") is True:
+            s["on"] = True
+        if subs.get("auto") is True:
+            s["auto"] = True
+        if subs.get("embed") is True:
+            s["embed"] = True
+        convert = subs.get("convert")
+        if convert in ("srt", "vtt", "best"):
+            s["convert"] = convert
+        langs = subs.get("langs")
+        if isinstance(langs, str) and (langs == "all" or RE_LANG.fullmatch(langs)):
+            s["langs"] = langs
+        subfmt = subs.get("subFormat")
+        if isinstance(subfmt, str) and RE_LANG.fullmatch(subfmt) and len(subfmt) <= 12:
+            s["subFormat"] = subfmt
+        if s:
+            out["subs"] = s
+    outdir = clean(sel.get("outputDir"), 2000)
+    if outdir:
+        out["outputDir"] = outdir
+    return out
+
+
+def queue_snapshot():
+    """Active + waiting jobs (oldest-waiting last) for the `queue` event."""
     with STATE_LOCK:
-        busy = v
+        items = []
+        if active_job is not None:
+            items.append({
+                "id": active_job["id"],
+                "url": active_job["url"],
+                "status": "downloading",
+                "position": 1,
+                "selection": active_job["selection"],
+            })
+        for i, j in enumerate(wait_queue, start=2):
+            items.append({
+                "id": j["id"],
+                "url": j["url"],
+                "status": "queued",
+                "position": i,
+                "selection": j["selection"],
+            })
+        return items
+
+
+def send_queue():
+    send({"event": "queue", "queue": queue_snapshot()})
+
+
+def start_worker(job):
+    threading.Thread(target=download_worker, args=(job,), daemon=True).start()
+
+
+def finish_job(job=None):
+    """The active job ended (done/error/cancelled): clear it and promote the
+    next waiting job, then push the new queue. Success, failure, and cancel
+    all advance the queue so one bad item never stalls the rest. `cancel_flag`
+    is reset for the promoted job so a cancel aimed at the old job can't leak
+    into the new one.
+
+    Idempotent per job: `download_worker`'s wrapper calls it unconditionally
+    (guaranteeing the queue advances even if the worker dies on an unexpected
+    exception), so passing `job` makes a second call a no-op once that job is
+    no longer active — the promotion below must only ever happen once.
+    """
+    global active_job, cancel_flag
+    with STATE_LOCK:
+        if job is not None and active_job is not job:
+            return
+        active_job = None
+        if wait_queue:
+            active_job = wait_queue.pop(0)
+            cancel_flag = False
+            start_worker(active_job)
+    send_queue()
 
 
 def read_frame(stream):
@@ -333,7 +484,7 @@ def sub_formats(tables):
 
 def probe_info(url):
     info, err = run_probe(url)
-    if info is None and ("list=" in (url or "").lower() or "/playlist" in (url or "").lower()):
+    if info is None and is_playlist_url(url):
         time.sleep(2)
         info, err = run_probe(url)
     if info is None:
@@ -342,7 +493,11 @@ def probe_info(url):
     def langs(table):
         out = {}
         for code, entries in (table or {}).items():
-            exts = sorted({e.get("ext") for e in entries if isinstance(e, dict)})
+            # e.get("ext") can be None on malformed track entries; sorted({None})
+            # would raise TypeError and take down the whole host (this runs on
+            # a request path), so keep only real non-empty strings.
+            exts = sorted({e["ext"] for e in entries
+                           if isinstance(e, dict) and isinstance(e.get("ext"), str) and e["ext"]})
             if exts:
                 out[code] = exts
         return out
@@ -355,6 +510,8 @@ def probe_info(url):
             return len(ch)
         return None
 
+    is_playlist = (bool(info.get("playlist_id")) or bool(count)
+                   or is_playlist_url(url))
     meta = {
         "title": clean(info.get("title"), 500),
         "thumbnail": clean(info.get("thumbnail"), 2000),
@@ -362,11 +519,10 @@ def probe_info(url):
         if isinstance(info.get("duration"), (int, float)) else None,
         "extractor": clean(info.get("extractor"), 64),
         "webpage": clean(info.get("webpage_url"), 2000),
-        "is_playlist": bool(info.get("playlist_id")) or bool(count),
+        "is_playlist": is_playlist,
         "playlist_count": count if isinstance(count, int) else None,
         "chapterCount": chapter_count(info),
     }
-    is_playlist = bool(info.get("playlist_id")) or bool(count)
 
     formats, subs, auto_subs, sub_formats_list = [], {}, {}, []
     if is_playlist:
@@ -378,7 +534,8 @@ def probe_info(url):
         if first:
             target = first.get("url")
             if not target and first.get("id"):
-                target = "https://www.youtube.com/watch?v=" + first["id"]
+                target = "https://www.youtube.com/watch?v=" + str(first["id"])
+            target = http_url(target)
             first_info, first_err = run_probe(target) if target else (None, "no target")
             if first_info:
                 formats = filter_formats(first_info, first_info.get("duration"))
@@ -406,6 +563,66 @@ def probe_info(url):
         "autoSubs": auto_subs,
         "subFormats": sub_formats_list,
     }, None
+
+
+def _reply_probe(req, payload, err):
+    if payload is None:
+        send({"req": req, "ok": False, "error": err or "probe failed"})
+    else:
+        send({"req": req, "ok": True, **payload})
+
+
+def probe_worker(req, url):
+    """Probe a URL off the main loop, coalescing concurrent same-URL probes.
+
+    A pathological probe can block for minutes (two run_probe subprocess
+    timeouts + flat_entries + the first-video probe); keeping it off the
+    request loop means a slow probe never freezes cancel/queue/reorder
+    handling. Download workers already run on their own threads, so only the
+    probe was serializing the loop before.
+
+    A burst of probes for the same URL (popup reopen churn) shares one run:
+    the first caller starts it, later callers park in `probe_waiters` and get
+    the same fan-out result. Results land in a short TTL-bounded cache so the
+    popup's auto-reprobe / re-submit codepaths don't trigger a fresh network
+    round-trip within a minute.
+    """
+    now = time.monotonic()
+    with PROBE_LOCK:
+        hit = probe_cache.get(url)
+        if hit and now - hit[0] <= PROBE_CACHE_TTL:
+            payload, err = hit[1]
+            _reply_probe(req, payload, err)
+            return
+        waiting = probe_waiters.get(url)
+        if waiting is not None:
+            waiting.append(req)
+            return
+        probe_waiters[url] = [req]
+
+    payload = err = None
+    try:
+        result, err = probe_info(url)
+        if result is not None:
+            payload = result
+    except Exception:
+        payload, err = None, "probe failed"
+    finally:
+        with PROBE_LOCK:
+            waiters = probe_waiters.pop(url, [])
+            if payload is not None or err:
+                probe_cache[url] = (time.monotonic(), (payload, err))
+                if len(probe_cache) > PROBE_CACHE_MAX:
+                    # Drop expired entries first; if still over the bound, keep
+                    # the newest PROBE_CACHE_MAX by insertion timestamp.
+                    cutoff = time.monotonic() - PROBE_CACHE_TTL
+                    for u in [u for u, (t, _) in probe_cache.items() if t < cutoff]:
+                        probe_cache.pop(u, None)
+                    while len(probe_cache) > PROBE_CACHE_MAX:
+                        oldest = min(probe_cache, key=lambda u: probe_cache[u][0])
+                        probe_cache.pop(oldest)
+        for waiter in waiters:
+            _reply_probe(waiter, payload, err)
 
 
 # ---------------------------------------------------------------- download --
@@ -454,6 +671,17 @@ def split_sections(main_file):
     return out
 
 
+def is_playlist_url(url):
+    """True for URLs yt-dlp treats as playlists by shape: YouTube playlists
+    carry `list=<id>` in the query, Bilibili uses a `/playlist` path. The
+    download/probe/section logic all share this one shape test (a URL with a
+    playlist param but `--no-playlist` still reports playlist fields, so probe
+    and build_command agree on what counts as a playlist).
+    """
+    u = (url or "").lower()
+    return "list=" in u or "/playlist" in u
+
+
 def build_command(url, sel, with_subs=True):
     out_dir = sel.get("outputDir")
     if not isinstance(out_dir, str) or not out_dir.replace("/", "").strip():
@@ -462,7 +690,7 @@ def build_command(url, sel, with_subs=True):
     os.makedirs(out_dir, exist_ok=True)
 
     playlist = sel.get("playlist") is True
-    is_pl = playlist and ("list=" in (url or "").lower() or "/playlist" in (url or "").lower())
+    is_pl = playlist and is_playlist_url(url)
     audio_only = sel.get("audioOnly") is True
     audio_fmt = sel.get("audioFmt")
     if audio_fmt not in ("best", "m4a", "mp3", "opus"):
@@ -480,7 +708,10 @@ def build_command(url, sel, with_subs=True):
 
     if audio_only:
         if format_id is not None:
-            fsel = format_id
+            # Mirror the video branch's playlist fallback: on a playlist a
+            # bare format id can 404 partway through, so fall back to the
+            # best-audio-flexible selector for the rest of the list.
+            fsel = format_id + ("/ba/b" if is_pl else "")
         else:
             fsel = "ba/b"
         cmd += ["-f", fsel]
@@ -490,6 +721,12 @@ def build_command(url, sel, with_subs=True):
             if is_pl else "%(title)s.%(ext)s"
         )
     else:
+        container = sel.get("container")
+        if container not in MERGE_CONTAINERS:
+            container = "best"
+        # merge_ext is implied by the format's container only when no explicit
+        # --merge-output-format container was requested; at most one flag is
+        # appended and an explicit container wins over the implied one.
         merge_ext = ""
         if format_id is not None:
             if format_has_audio:
@@ -499,14 +736,13 @@ def build_command(url, sel, with_subs=True):
                 ext = ext.lower() if isinstance(ext, str) else ""
                 if ext in MERGE_CONTAINERS and ext != "best":
                     fsel = f"{format_id}+ba[ext={ext}]/{format_id}+ba/b"
-                    merge_ext = ext
+                    if container == "best":
+                        merge_ext = ext
                 else:
                     fsel = format_id + "+ba/b"
             if is_pl:
                 fsel += "/bv*+ba/b"
             cmd += ["-f", fsel]
-            if merge_ext:
-                cmd += ["--merge-output-format", merge_ext]
         else:
             res = sel.get("resolution")
             res = str(res).strip() if res is not None else "best"
@@ -516,10 +752,9 @@ def build_command(url, sel, with_subs=True):
                 h = max(1, min(int(res), 4320))
                 cap = f"[height<={h}]"
                 cmd += ["-f", f"bv*{cap}+ba/b{cap}"]
-        container = sel.get("container")
-        if container not in MERGE_CONTAINERS:
-            container = "best"
-        if container != "best":
+        if merge_ext:
+            cmd += ["--merge-output-format", merge_ext]
+        elif container != "best":
             cmd += ["--merge-output-format", container]
         out_tpl = (
             "%(playlist_title)s/%(playlist_index)03d_%(title)s.%(ext)s"
@@ -542,7 +777,6 @@ def build_command(url, sel, with_subs=True):
 
     cmd += ["--paths", out_dir, "-o", out_tpl]
 
-    AUTO_ALL = "en"
     if with_subs:
         subs = sel.get("subs") or {}
         if subs.get("on") is True:
@@ -550,9 +784,10 @@ def build_command(url, sel, with_subs=True):
             if subs.get("auto") is True:
                 cmd += ["--write-auto-subs"]
             langs = subs.get("langs")
-            if langs == "all" or not (isinstance(langs, str) and RE_LANG.fullmatch(langs)):
-                langs = AUTO_ALL if (subs.get("auto") is True) else "all"
-            cmd += ["--sub-langs", langs]
+            if isinstance(langs, str) and langs != "all" and RE_LANG.fullmatch(langs):
+                cmd += ["--sub-langs", langs]
+            elif subs.get("auto") is not True:
+                cmd += ["--sub-langs", "all"]
             sub_fmt = subs.get("subFormat")
             if not (isinstance(sub_fmt, str) and RE_LANG.fullmatch(sub_fmt) and len(sub_fmt) <= 12):
                 sub_fmt = "best/srt"
@@ -604,61 +839,6 @@ def osd_close():
         pass
 
 
-def notify_downloading(title, pct, ref):
-    """In-progress toast showing the video name while the download runs.
-
-    ref[0] carries the notification id: the first call prints it (-p), later
-    calls replace in place (-r <id>) so progress updates don't stack toasts.
-    title is already clean()'ed by the caller; pct is an integer percent.
-    Skips entirely under NDLP_NO_OMARCHY so hand-driving the host stays
-    silent — unlike the end-of-download toasts, which still fall back.
-    """
-    if os.environ.get("NDLP_NO_OMARCHY"):
-        return
-    body = title if pct is None else f"{title} · {pct}%"
-    omarchy_send = omarchy_tool("omarchy-notification-send")
-    if omarchy_send:
-        try:
-            if ref[0] is None:
-                proc = subprocess.run(
-                    [omarchy_send, "-g", OSD_ICON_DOWNLOAD, "Downloading", body,
-                     "-t", "10000", "-p"],
-                    capture_output=True, timeout=15)
-                out = proc.stdout.decode("utf-8", "replace").strip()
-                if proc.returncode == 0 and out.isdigit():
-                    ref[0] = out
-            else:
-                subprocess.run(
-                    [omarchy_send, "-g", OSD_ICON_DOWNLOAD, "Downloading", body,
-                     "-t", "10000", "-r", ref[0]],
-                    check=False, timeout=15, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
-        return
-    # Non-Omarchy fallback: one-shot toast (notify-send has no reliable id).
-    if ref[0] is None:
-        ref[0] = "sent"
-        try:
-            subprocess.run(["notify-send", "-a", "Najm Downloader", "-t", "10000",
-                            "Downloading", body], check=False, timeout=15,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
-
-
-def notify_dismiss_downloading():
-    if os.environ.get("NDLP_NO_OMARCHY"):
-        return
-    omarchy_shell = omarchy_tool("omarchy-shell")
-    if not omarchy_shell:
-        return
-    try:
-        subprocess.run([omarchy_shell, "-q", "notifications", "dismiss", "Downloading"],
-                       check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
-
-
 def notify_done(title, filepath):
     if not os.path.isfile(filepath):
         return
@@ -669,13 +849,17 @@ def notify_done(title, filepath):
         try:
             crop = "crop='min(iw,ih)':'min(iw,ih)',scale=256:256"
             subprocess.run(
-                [FFMPEG, "-y", "-i", filepath, "-ss", "00:00:00.1",
+                [FFMPEG, "-y", "-ss", "00:00:00.1", "-i", filepath,
                  "-vframes", "1", "-vf", crop, "-q:v", "2", preview, "-loglevel", "quiet"],
                 check=False, timeout=30)
             if os.path.getsize(preview) == 0:
                 os.unlink(preview)
                 preview = None
         except Exception:
+            try:
+                os.unlink(preview)
+            except Exception:
+                pass
             preview = None
         image = preview or None
 
@@ -706,7 +890,11 @@ def notify_done(title, filepath):
                     os.unlink(image)
             except OSError:
                 pass
-        threading.Timer(8.0, _rm).start()
+        # Give the notification daemon generous time to consume the preview:
+        # the notification send above can itself block up to 15s, so deleting
+        # 8s after it returns risks ripping the thumbnail out from under a slow
+        # backend. 30s outlives the send regardless.
+        threading.Timer(30.0, _rm).start()
 
 
 def notify_many(count, first_title, out_dir):
@@ -752,40 +940,64 @@ def notify_error(message):
         pass
 
 
-def download_worker(req, payload):
-    global current_proc, cancel_flag
-    # A cancel can arrive before this worker starts (queued frame); the flag
-    # must never leak into a fresh download.
-    cancel_flag = False
-    url = http_url(payload.get("url"))
+def download_worker(job):
+    """Run the job on its own thread, always advancing the queue.
+
+    `_download_worker` performs the whole download; this wrapper guarantees the
+    queue is never left wedged and the popup always gets a terminal event, even
+    when an unexpected exception escapes the big body (the `send()` OSError
+    guard already covers the dying-stdout case, this is the belt-and-suspenders
+    net). `finish_job(job)` is idempotent per job, so a worker that already
+    called it on its happy/cancel/error paths won't double-promote.
+    """
+    try:
+        _download_worker(job)
+    except Exception:
+        if not job.get("_ended"):
+            try:
+                send({"req": job.get("req"), "event": "error",
+                      "message": "Internal error — please retry"})
+            except Exception:
+                pass
+    finally:
+        finish_job(job)
+
+
+def _download_worker(job):
+    global current_proc
+    req = job["req"]
+    url = http_url(job.get("url"))
     if url is None:
+        job["_ended"] = True
         send({"req": req, "event": "error", "message": "Unsupported URL"})
-        set_busy(False)
+        finish_job()
         return
-    sel = payload.get("selection")
-    if not isinstance(sel, dict):
-        sel = {}
+    sel = job["selection"]
 
     send({"req": req, "event": "start"})
     items = []
     title = clean(sel.get("title"), 200) if isinstance(sel.get("title"), str) else None
-    dl_toast = [None]
-    dl_toast_ms = [0.0]
+    osd_pct = [0]
+    osd_keepalive_ms = [0.0]
 
-    def _toast_refresh(pct):
+    def _osd_refresh(pct):
+        # Keep the bottom-center download OSD (title over a progress bar)
+        # alive — it hides after its own duration. Progress ticks call this
+        # ~1/s; the subtitle lock probe's retry gaps call it with None to
+        # re-show the last percent, so the bar doesn't expire mid-probe.
         now = time.monotonic()
-        if title and now - dl_toast_ms[0] >= 1.0:
-            dl_toast_ms[0] = now
-            notify_downloading(title, pct, dl_toast)
+        if now - osd_keepalive_ms[0] < 1.0:
+            return
+        osd_keepalive_ms[0] = now
+        if pct is not None:
+            osd_pct[0] = max(0, min(100, int(pct)))
+        osd_progress(osd_pct[0], title)
 
     if osd_available():
         osd_progress(0, title)
-    if title:
-        notify_downloading(title, None, dl_toast)
     osd_state = {"int": -1, "ms": 0.0}
 
-    is_pl = (sel.get("playlist") is True and
-             ("list=" in (url or "").lower() or "/playlist" in (url or "").lower()))
+    is_pl = sel.get("playlist") is True and is_playlist_url(url)
 
     SUB_RATELIMITED = ("Subtitles didn't download — the site is rate-limiting subtitle "
                        "requests (HTTP 429). Try again in a few minutes.")
@@ -803,7 +1015,7 @@ def download_worker(req, payload):
 
     def _sleep_until(delay):
         # Slice the backoff so a cancel lands in milliseconds, not seconds.
-        # A probe's retry gap is quiet for the toast — refresh it here so it
+        # A probe's retry gap is quiet for the OSD — refresh it here so it
         # doesn't expire mid-lock-probe (worst case SUB_LOCK_TIMEOUT x 3).
         end = time.monotonic() + delay
         while True:
@@ -812,7 +1024,7 @@ def download_worker(req, payload):
             remaining = end - time.monotonic()
             if remaining <= 0:
                 return True
-            _toast_refresh(None)
+            _osd_refresh(None)
             time.sleep(min(remaining, 0.1))
 
     def subtitle_lock_ok():
@@ -826,6 +1038,13 @@ def download_worker(req, payload):
         lock_sel = dict(sel)
         tmp_dir = tempfile.mkdtemp(prefix="najm-sublock-")
         lock_sel["outputDir"] = tmp_dir
+        # Each attempt can block up to SUB_LOCK_TIMEOUT in communicate(); the
+        # backoff _sleep_until() refreshes the OSD only between attempts, so
+        # a per-attempt clock thread keeps the download OSD alive through
+        # the long silence too.
+        def _osd_clock(stopping):
+            while not stopping.wait(1.0):
+                _osd_refresh(None)
         try:
             cmd, _ = build_command(url, lock_sel, with_subs=True)
             if "--" in cmd:
@@ -841,19 +1060,32 @@ def download_worker(req, payload):
                     text=True)
                 with STATE_LOCK:
                     lock_proc = proc
+                # A cancel that landed between the caller's _cancel_pending()
+                # check (above) and this Popen wasn't seen by the cancel
+                # handler's terminate step (lock_proc wasn't published yet);
+                # kill it here so communicate() returns promptly and the loop
+                # reports "cancelled" instead of blocking up to SUB_LOCK_TIMEOUT.
+                if _cancel_pending():
+                    proc.terminate()
+                stopping = threading.Event()
+                clock = threading.Thread(target=_osd_clock, args=(stopping,), daemon=True)
+                clock.start()
                 try:
-                    _out, err = proc.communicate(timeout=SUB_LOCK_TIMEOUT)
-                except subprocess.TimeoutExpired:
-                    with STATE_LOCK:
-                        if lock_proc is proc:
-                            lock_proc = None
-                    proc.kill()
                     try:
-                        proc.communicate(timeout=5)
-                    except (subprocess.TimeoutExpired, OSError):
-                        pass
-                    return "unknown"
+                        _out, err = proc.communicate(timeout=SUB_LOCK_TIMEOUT)
+                    except subprocess.TimeoutExpired:
+                        with STATE_LOCK:
+                            if lock_proc is proc:
+                                lock_proc = None
+                        proc.kill()
+                        try:
+                            proc.communicate(timeout=5)
+                        except (subprocess.TimeoutExpired, OSError):
+                            pass
+                        return "unknown"
                 finally:
+                    stopping.set()
+                    clock.join(timeout=2)
                     with STATE_LOCK:
                         if lock_proc is proc:
                             lock_proc = None
@@ -872,11 +1104,18 @@ def download_worker(req, payload):
 
     def run_one(with_subs):
         global current_proc
-        nonlocal items
         cmd, out_dir = build_command(url, sel, with_subs=with_subs)
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, bufsize=1)
-        current_proc = proc
+        with STATE_LOCK:
+            current_proc = proc
+        # A cancel that landed between the caller's `_cancel_pending()` check
+        # and this Popen (the worker hadn't published `current_proc` yet) would
+        # otherwise be missed and the whole download would run to the end just
+        # to self-report as cancelled; kill it now so the caller's `rc < 0`
+        # path handles it promptly.
+        if _cancel_pending():
+            proc.terminate()
         errors = []
         last_ev = [0.0]
         titles = {}
@@ -915,7 +1154,7 @@ def download_worker(req, payload):
                     if ipct != osd_state["int"] and now - osd_state["ms"] >= 0.25:
                         osd_state["int"], osd_state["ms"] = ipct, now
                         osd_progress(ipct, title)
-                _toast_refresh(int(pct))
+                _osd_refresh(int(pct))
                 continue
             if line.startswith("NJDP:FILE\t"):
                 real = resolve_file(line.split("\t", 1)[1], out_dir)
@@ -941,45 +1180,56 @@ def download_worker(req, payload):
 
     warn_subs = None
     subs_on = bool((sel.get("subs") or {}).get("on"))
+
+    def _cancelled_exit():
+        job["_ended"] = True
+        osd_close()
+        send({"req": req, "event": "cancelled", "items": items})
+        finish_job()
+
     if subs_on:
         lock = subtitle_lock_ok()
         if lock == "cancelled":
-            osd_close()
-            notify_dismiss_downloading()
-            send({"req": req, "event": "cancelled", "items": items})
-            cancel_flag = False
-            set_busy(False)
+            _cancelled_exit()
             return
         if lock == "blocked":
             warn_subs = SUB_RATELIMITED if _ratelimited("\n".join(lock_log)) else SUB_FAILED
             send({"req": req, "event": "info", "message": warn_subs})
 
+    # A cancel can land right between start_next() promoting this job and the
+    # worker spawning yt-dlp; bail before launching anything, or the download
+    # would run to the end and only then report itself cancelled.
+    if _cancel_pending():
+        _cancelled_exit()
+        return
     rc, out_dir, errors, titles = run_one(warn_subs is None and subs_on)
     if rc > 0 and not items and any(RE_SUB_ERROR.search(e) for e in errors):
+        if _cancel_pending():
+            _cancelled_exit()
+            return
         send({"req": req, "event": "info",
               "message": "Subtitle fetch failed — retrying video without subtitles"})
         warn_subs = warn_subs or (SUB_RATELIMITED if _ratelimited("\n".join(errors)) else SUB_FAILED)
         rc, out_dir, errors, titles = run_one(False)
 
-    current_proc = None
+    with STATE_LOCK:
+        current_proc = None
     # A negative rc means yt-dlp was killed by a signal; the only source is
     # our own cancel handler. The flag check also covers a cancel that landed
     # just after run_one returned cleanly.
     if cancel_flag or (isinstance(rc, int) and rc < 0):
-        osd_close()
-        notify_dismiss_downloading()
-        send({"req": req, "event": "cancelled", "items": items})
-        cancel_flag = False
-        set_busy(False)
+        _cancelled_exit()
         return
     if rc != 0 and not items:
         msg = errors[0] if errors else "yt-dlp failed"
         msg = clean(msg, 400) or "yt-dlp failed"
+        job["_ended"] = True
         osd_close()
-        notify_dismiss_downloading()
-        notify_error(msg)
         send({"req": req, "event": "error", "message": msg})
-        set_busy(False)
+        # Advance the queue before notifying: notify_error can block up to 15s
+        # and the next job must start regardless of a hung notification server.
+        finish_job()
+        notify_error(msg)
         return
     if sel.get("chapters") == "split" and items:
         # yt-dlp keeps every whole video next to its section files; drop each
@@ -1001,20 +1251,23 @@ def download_worker(req, payload):
         if split_items:
             items = split_items
     osd_close()
-    notify_dismiss_downloading()
+    job["_ended"] = True
     send(dict({"req": req, "event": "done", "items": items}, **(warn_subs and {"warn": warn_subs} or {})))
+    # Advance the queue before notifying: notify_done can block up to the
+    # ffmpeg-thumbnail (30s) + omarchy-send (15s) timeouts and must not stall
+    # the next queued job.
+    finish_job()
     if len(items) > 1:
         notify_many(len(items), titles.get(items[0]) or "", out_dir)
     else:
         for p in items:
             notify_done(titles.get(p) or os.path.basename(p), p)
-    set_busy(False)
 
 
 # ------------------------------------------------------------------- main ---
 
 def main():
-    global current_proc, cancel_flag, lock_proc, busy
+    global current_proc, cancel_flag, lock_proc, active_job, next_job_id
     requests = queue.Queue()
 
     def reader():
@@ -1035,10 +1288,30 @@ def main():
         action = frame.get("action")
 
         if action == "cancel":
+            target = frame.get("queueId")
+            if isinstance(target, int):
+                # A queueId-cancel targets a *waiting* item only. An id that
+                # isn't among the waiters anymore (it was just promoted to
+                # active, or already removed) is a no-op — never cancel the
+                # running job because of a stale Remove click.
+                removed = False
+                with STATE_LOCK:
+                    for i, j in enumerate(wait_queue):
+                        if j["id"] == target:
+                            wait_queue.pop(i)
+                            removed = True
+                            break
+                if removed:
+                    send({"req": req, "ok": True})
+                    send_queue()
+                    continue
+                send({"req": req, "ok": False, "error": "not found"})
+                continue
+            # No queueId: cancel the active job.
             with STATE_LOCK:
                 proc = current_proc
                 lproc = lock_proc
-                if busy:
+                if active_job is not None:
                     cancel_flag = True
             if proc is not None:
                 try:
@@ -1063,19 +1336,56 @@ def main():
             if url is None:
                 send({"req": req, "ok": False, "error": "Unsupported URL"})
                 continue
-            result, err = probe_info(url)
-            if result is None:
-                send({"req": req, "ok": False, "error": err or "probe failed"})
-            else:
-                send({"req": req, "ok": True, **result})
+            threading.Thread(target=probe_worker, args=(req, url), daemon=True).start()
             continue
 
         if action == "download":
-            if busy:
-                send({"req": req, "event": "error", "message": "A download is already running"})
+            url = http_url(frame.get("url"))
+            if url is None:
+                send({"req": req, "event": "error", "message": "Unsupported URL"})
                 continue
-            set_busy(True)
-            threading.Thread(target=download_worker, args=(req, frame), daemon=True).start()
+            sel = sanitize_selection(frame.get("selection"))
+            with STATE_LOCK:
+                jid = next_job_id
+                next_job_id += 1
+                job = {"id": jid, "req": req, "url": url, "selection": sel}
+                if active_job is None:
+                    active_job = job
+                    cancel_flag = False
+                    start_worker(job)
+                else:
+                    wait_queue.append(job)
+            send({"req": req, "ok": True, "queueId": jid})
+            send_queue()
+            continue
+
+        if action == "getQueue":
+            send({"req": req, "ok": True, "queue": queue_snapshot()})
+            continue
+
+        if action == "reorder":
+            target = frame.get("queueId")
+            new_idx = frame.get("newIndex")
+            if not (isinstance(target, int) and isinstance(new_idx, int) and new_idx >= 0):
+                send({"req": req, "ok": False, "error": "invalid reorder"})
+                continue
+            with STATE_LOCK:
+                target_idx = None
+                for i, j in enumerate(wait_queue):
+                    if j["id"] == target:
+                        target_idx = i
+                        break
+                if target_idx is None:
+                    missing = True
+                else:
+                    missing = False
+                    item = wait_queue.pop(target_idx)
+                    wait_queue.insert(min(new_idx, len(wait_queue)), item)
+            if missing:
+                send({"req": req, "ok": False, "error": "not found"})
+                continue
+            send({"req": req, "ok": True})
+            send_queue()
             continue
 
         if action == "theme":

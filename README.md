@@ -39,13 +39,19 @@ offers:
   and Cancel
 - completion notification styled like the defaults (`omarchy-notification-send`
   with a thumbnail preview and an "open in mpv" action); errors notify too
+- **download queue**: add any number of videos — they download one after
+  another, and a failed or cancelled item auto-advances to the next. The popup
+  lists what's waiting (title + chosen options) with per-item remove and move
+  up/down, and an in-flight queue survives a browser restart (the service
+  worker mirrors it to `chrome.storage.local` and re-submits the jobs to the
+  fresh host on wake; the active item restarts from scratch)
 
 ## Layout
 
 ```
 extension/          MV3 extension (manifest rendered by install.sh)
   manifest.json.in  template — @@KEY@@ is replaced with your RSA public key
-  background-2.js   owns a single native-messaging port, routes probe/download/cancel (filename versioned! see Troubleshooting)
+  background-3.js   owns a single native-messaging port, routes probe/download/cancel/reorder/getQueue + the queue (filename versioned! see Troubleshooting)
   popup.{html,css,js}  toolbar popup
   options.{html,css,js} defaults (output dir, resolutions, subtitle defaults)
   theme.{js,css}       live Omarchy theme → CSS vars on :root
@@ -77,7 +83,7 @@ What it does:
    - `~/.config/BraveSoftware/Brave-Origin/NativeMessagingHosts/`
 3. Appends the extension dir to the existing `--load-extension=` line in
    `~/.config/chromium-flags.conf` and `~/.config/brave-origin-flags.conf`
-   (timestamped `.najm-bak` backup; idempotent).
+   (`.najm-bak` backup; idempotent).
 
 Then **restart the browser**. The extension loads with the other Omarchy
 extensions; click the icon in the toolbar.
@@ -94,7 +100,8 @@ extensions; click the icon in the toolbar.
    subtitles default to **all available**.
 3. Download; progress shows in the Omarchy OSD overlay and the popup.
    Files go to your output dir (default `~/Videos`, change in Options);
-   playlist videos are numbered by playlist order.
+   playlist videos are numbered by playlist order. Reopen the popup at any
+   time to add more downloads, or reorder/remove rows in the queue section.
 
 Subtitle notes:
 
@@ -102,10 +109,10 @@ Subtitle notes:
   video offers. By default only **manual** subtitles are eligible: `All available`
   means every manual track. Auto-generated captions are downloaded only when you
   tick **Auto-generated**, and then for the chosen language only (or a single
-  default, English, for `All available`) — never a per-language flood. For
-  playlists the same choice is applied to every video, and a language you pick
-  stays picked. If the video offers no subtitles at all, the option is disabled
-  with a hint.
+  default track for `All available`: English when offered, otherwise the first
+  available) — never a per-language flood. For playlists the same choice is
+  applied to every video, and a language you pick stays picked. If the video
+  offers no subtitles at all, the option is disabled with a hint.
 - When the site is rate-limiting subtitle requests (YouTube's HTTP 429), the
   host retries a few times, then downloads the video without subtitles and
   shows a clear warning in the popup instead of silently failing.
@@ -126,10 +133,22 @@ JSON on stdio:
   streams** (id, size, fps, ext, codecs), manual + auto subtitle language maps;
   for a playlist it also samples the first video so the same options are real,
   plus entry count
-- `download` → streams `start` / `progress` (pct %speed %eta) / `file` / `done`
+- `download` → always accepted: if nothing is running it starts immediately,
+  otherwise it joins the queue and the host replies `{ok:true, queueId}`. Each
+  job streams `start` / `progress` (pct %speed %eta) / `file` / `done`
   (a chosen `formatId` downloads that exact stream instead of re-deriving;
-  `chapters: "embed" | "split"` drives the section features)
-- `cancel` → terminates the running yt-dlp process
+  `chapters: "embed" | "split"` drives the section features). Every queue
+  change broadcasts a `queue` event with the full snapshot — active item first
+  (`status: "downloading"`), then waiting items (`status: "queued"`), each
+  `{id, url, status, position, selection}` — and done/error/cancel
+  auto-advance to the next item
+- `cancel` → with a `queueId` removes that waiting item (a `queueId` that is
+  no longer waiting is a no-op `not found`); without one it terminates the
+  running yt-dlp process and the queue advances
+- `reorder` `{queueId, newIndex}` → moves a waiting item (0-based index in the
+  waiting subgroup)
+- `getQueue` → the same snapshot the `queue` event carries (the service worker
+  uses it after a restart to decide whether the host already owns a queue)
 - `theme` → read-only snapshot of the live Omarchy theme (theme name, resolved
   font family + radius, raw `colors` and `shell` token dicts), read from the
   same files the Quickshell shell uses
@@ -149,8 +168,12 @@ JSON on stdio:
   (`browser.theme` is Firefox-only), so this host round-trip is the only way to
   get the real palette.
 
-Progress also drives the Quickshell OSD (`omarchy-osd`, throttled ~4/sec,
-same glyphs as the default Download Video) and completion/failure toasts use
+Progress drives the Quickshell OSD exclusively — no notification is sent while
+a download runs (the old per-second "Downloading" toast spammed the
+notification center via its history log). The OSD is rendered **stacked**
+(video name over a progress bar, bottom-center) by a user clone of
+`omarchy.osd` at `~/.config/omarchy/plugins/najm.osd/`; stock Omarchy only
+draws a bar *or* a message. Completion/failure toasts use
 `omarchy-notification-send` with thumbnail + mpv action; `notify-send` is the
 fallback when Omarchy isn't present.
 
@@ -170,8 +193,13 @@ whitelist-validated.
   `chrome://extensions` → reload "Najm Downloader", or fully quit the browser
   (a window close can leave background processes keeping the old SW alive).
   Chromium caches MV3 service workers for `--load-extension` extensions, so SW
-  changes also need the filename bumped (`background-2.js` → `background-3.js`)
-  before reload — same trick as the Omarchy `copy-url` extension.
+  changes also need the filename bumped (currently `background-3.js`, the
+  download-queue bump from `background-2.js`) before reload — same trick as
+  the Omarchy `copy-url` extension.
+- Probe shows **`Could not establish connection. Receiving end does not exist.`**
+  → the service worker isn't answering (stale cached worker, see above). Reload
+  the extension from `chrome://extensions` or fully quit the browser — no
+  code change fixes it.
 - Host status dot red in the popup → the native host wasn't found. Verify
   `com.najm.ytdlp.json` exists in the browser's `NativeMessagingHosts`, the
   `path` and `allowed_origins` are correct, and you restarted after install.
@@ -185,3 +213,7 @@ whitelist-validated.
 ./uninstall.sh            # removes host manifests + flags, keeps the RSA key
 ./uninstall.sh --purge-key  # also delete the key (new extension id on reinstall)
 ```
+
+Uninstall strips the extension in place from the `--load-extension=` list, so
+flags other tools added after install are preserved; the `.najm-bak` backup is
+left on disk as a manual safety net.

@@ -4,11 +4,12 @@
 // Native selects are hidden inside `.om-select` shells whose floating menu is
 // rebuild from the select's options whenever the DOM mutates (popup.js
 // re-populates `formatSelect` after a probe).
-(() => {
+(function() {
   "use strict";
 
   const CHECK_SEL = "label.check > input[type='checkbox']";
   const CARET_FALLBACK = "\u25BE";
+  let selectSeq = 0;
 
   function decorateCheck(input) {
     const label = input.parentElement;
@@ -26,10 +27,13 @@
     const wrap = document.createElement("div");
     wrap.className = "om-select";
 
+    const menuId = "om-select-menu-" + ++selectSeq;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "om-select-btn";
+    btn.setAttribute("role", "combobox");
     btn.setAttribute("aria-haspopup", "listbox");
+    btn.setAttribute("aria-controls", menuId);
     btn.setAttribute("aria-expanded", "false");
     const labelEl = document.createElement("span");
     labelEl.className = "om-select-label";
@@ -40,6 +44,7 @@
 
     const menu = document.createElement("div");
     menu.className = "om-select-menu";
+    menu.id = menuId;
     menu.setAttribute("role", "listbox");
     menu.hidden = true;
 
@@ -47,6 +52,7 @@
     wrap.append(btn, menu, select);
     select.classList.add("om-native");
     select.setAttribute("aria-hidden", "true");
+    select.tabIndex = -1;
     menu.addEventListener("mousedown", (e) => e.preventDefault());
 
     const rebuild = () => {
@@ -140,6 +146,19 @@
     const toggleOpen = () => (menu.hidden ? open() : close());
 
     btn.addEventListener("click", toggleOpen);
+
+    // Native `change` covers user picks via pick() above and any code that
+    // dispatches one after a programmatic .value set (popup/options). The
+    // MutationObserver alone can't see IDL property changes on a static option
+    // list, so this is what keeps the button label honest.
+    select.addEventListener("change", syncLabel);
+
+    // A <label for="…Select"> click focuses the invisible native select
+    // (tabIndex -1 keeps it out of the tab order); surface that as the menu
+    // opening instead of an invisible focus.
+    select.addEventListener("focus", () => {
+      if (!btn.disabled) open();
+    });
 
     btn.addEventListener("keydown", (e) => {
       const keys = ["ArrowDown", "ArrowUp", "Home", "End"];

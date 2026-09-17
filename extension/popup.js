@@ -1,16 +1,3 @@
-const DEFAULTS = {
-  subsOn: false,
-  auto: false,
-  langs: "en",
-  langsTouched: false,
-  subFormat: "srt",
-  convertSrt: false,
-  embed: false,
-  playlist: false,
-  chapters: "off", // "off" | "embed" | "split"
-  outDir: "~/Videos",
-};
-
 function fmtBytes(n) {
   if (n == null || n <= 0) return "";
   if (n >= 1e9) return (n / 1e9).toFixed(2).replace(/0+$/, "").replace(/\.$/, "") + " GB";
@@ -35,9 +22,25 @@ let prefs = { ...DEFAULTS };
 let url = "";
 let probeData = null;
 let playlistTouched = false;
+// Set once the user edits the URL field by hand, so the popup stops
+// overwriting it from the tab's own navigations.
+let urlTouched = false;
 
 function send(msg) {
   return chrome.runtime.sendMessage(msg).catch((e) => ({ ok: false, error: String(e) }));
+}
+
+// A dead or stale MV3 service worker rejects every runtime.sendMessage with this
+// exact Chrome text. Surface a reload hint instead of raw API noise; the fix is
+// browser-side (reload from chrome://extensions), not code-side.
+// theme.js (loaded before this file on popup.html) owns the single copy of the
+// regex and message and exports them on window.
+const SW_GONE_RE = window.SW_GONE_RE;
+const SW_GONE_MSG =
+  window.SW_GONE_DIAG ||
+  "The extension's background worker isn't responding — open chrome://extensions, reload Najm Downloader, then try again.";
+function swGone(message) {
+  return SW_GONE_RE.test(String(message || ""));
 }
 
 function checkHost() {
@@ -101,9 +104,10 @@ async function loadProbeCache() {
 }
 
 function probe() {
-  url = el("url").value.trim();
+  const requestedUrl = el("url").value.trim();
+  url = requestedUrl;
   setWarn(null);
-  if (!plausibleVideoUrl(url)) {
+  if (!plausibleVideoUrl(requestedUrl)) {
     el("probeArea").hidden = false;
     el("probeErr").hidden = false;
     el("probeErr").textContent = "Enter an http(s) video URL first.";
@@ -115,16 +119,24 @@ function probe() {
   el("meta").textContent = "Probing…";
   el("probeArea").hidden = false;
 
-  send({ action: "probe", url }).then((r) => {
+  send({ action: "probe", url: requestedUrl }).then((r) => {
     el("probeBtn").disabled = false;
+    // Drop a stale reply: the field has moved on (new tab URL or a manual
+    // edit), so this result belongs to a different page and must neither be
+    // shown nor cached — otherwise it lands on the next video's row.
+    if (el("url").value.trim() !== requestedUrl) return;
     if (!r || !r.ok) {
       el("probeErr").hidden = false;
-      el("probeErr").textContent = (r && r.error) || "Probe failed";
+      const err = (r && r.error) || "Probe failed";
+      el("probeErr").textContent = swGone(err) ? SW_GONE_MSG : err;
       el("meta").textContent = "";
+      // No result for this URL: drop any previous video's data so its options
+      // can't be submitted against the new link.
+      probeData = null;
       return;
     }
-    saveProbeCache(url, r);
-    renderProbe(r);
+    saveProbeCache(requestedUrl, r);
+    renderProbe(r, requestedUrl);
   });
 }
 
@@ -305,6 +317,17 @@ function renderSubFormats() {
   sel.disabled = false;
 }
 
+// The "All available (auto default)" option is an intent, not a language: with
+// auto-captions on the host would otherwise emit every auto track in every
+// language (`--write-auto-subs` with no `--sub-langs`). Resolve it to a single
+// sensible track — English when offered, else the first offered.
+function defaultAutoTrack() {
+  const manual = Object.keys((probeData && probeData.subs) || {});
+  const auto = Object.keys((probeData && probeData.autoSubs) || {});
+  const offered = [...manual, ...auto.filter((c) => !manual.includes(c))];
+  return offered.includes("en") ? "en" : (offered[0] || "all");
+}
+
 function renderLangs() {
   const sel = el("langs");
   const manual = Object.keys(probeData.subs || {});
@@ -336,6 +359,12 @@ function renderLangs() {
     want = prefs.langs;
   } else if (isPlaylist) {
     want = "all";
+  } else if (prefs.langs === "all") {
+    // "all" is an explicit menu option ("every manual track"); honor the
+    // choice instead of silently rewriting it to the first manual language.
+    // With auto-captions on it means "the site's auto default", so resolve it
+    // to one concrete track rather than every auto track in every language.
+    want = withAuto ? defaultAutoTrack() : "all";
   } else {
     want = prefs.langs && !withAuto && !manual.includes(prefs.langs)
       ? (manual.length ? manual[0] : "all")
@@ -345,7 +374,7 @@ function renderLangs() {
 
   const oAll = document.createElement("option");
   oAll.value = "all";
-  oAll.textContent = withAuto ? "All available (subtitles + auto en)" : "All available (subtitles)";
+  oAll.textContent = withAuto ? "All available (auto default)" : "All available (subtitles)";
   sel.appendChild(oAll);
 
   const manualGroup = document.createElement("optgroup");
@@ -404,13 +433,25 @@ function updateChaptersControl() {
   hint.hidden = !st.enabled;
   hint.textContent = st.reason && !st.enabled ? st.reason : "";
   sel.value = prefs.chapters || "off";
+  // This select's option list is static, so the decorated label only re-syncs
+  // on a change event (the MutationObserver can't see a programmatic .value
+  // set); surface it so the visible choice matches the saved pref.
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
   const label = wrap.querySelector(".field-label");
   if (label) label.textContent = `Video sections (${probeData.meta.chapterCount} chapters)`;
 }
 
-function renderProbe(r) {
-  probeData = r;
-  const meta = r.meta || {};
+function renderProbe(r, sourceUrl) {
+  // Work on a defensive copy: renderFormats() replaces probeData.formats in
+  // place, and `r` may also be the very object handed to saveProbeCache() —
+  // mutating it would leak the collapsed/preset list into the cache for a
+  // future reopen (a playlist that fell back to presets would then reopen as
+  // a single broken "Audio only" option).
+  probeData = JSON.parse(JSON.stringify(r));
+  // Bind this result to the exact URL it was probed for so the Download
+  // button can refuse to ship an old video's selection against a new URL.
+  probeData.sourceUrl = sourceUrl || "";
+  const meta = probeData.meta || {};
   const tag = [];
   if (meta.is_playlist) tag.push("playlist" + (meta.playlist_count ? ` · ${meta.playlist_count}` : ""));
   if (meta.chapterCount) tag.push(meta.chapterCount + " chapters");
@@ -474,6 +515,7 @@ function buildSelection() {
   const meta = probeData && probeData.meta;
   return {
     title: (meta && (meta.sample || meta.title)) || "",
+    label: formatLabel(),
     audioOnly: fmt.audioOnly,
     formatId: fmt.formatId,
     formatHasAudio: !!fmt.formatHasAudio,
@@ -484,7 +526,11 @@ function buildSelection() {
     subs: {
       on: prefs.subsOn && !el("subsOn").disabled,
       auto: prefs.auto,
-      langs: prefs.langs || "all",
+      // Never ship "all" with auto-captions on: the host would then emit
+      // `--write-auto-subs` with no `--sub-langs` and fetch every language.
+      langs: (prefs.langs === "all" && prefs.auto)
+        ? defaultAutoTrack()
+        : (prefs.langs || "all"),
       subFormat: prefs.subFormat,
       convert: prefs.convertSrt ? "srt" : "best",
       embed: prefs.embed,
@@ -499,27 +545,126 @@ function setProgress(p) {
   el("pct").textContent = p != null ? Math.round(p) + "%" : "";
 }
 
-let warnMsg = null;
-
 function setWarn(msg) {
-  warnMsg = msg || null;
-  el("warn").hidden = !warnMsg;
-  el("warn").textContent = warnMsg || "";
+  el("warn").hidden = !msg;
+  el("warn").textContent = msg || "";
+}
+
+function formatLabel() {
+  const id = el("formatSelect").value;
+  const f = (probeData.formats || []).find((x) => String(x.id) === id);
+  if (!f) return "Best";
+  if (f.preset) return f.label;
+  if (!f.vcodec || f.vcodec === "none") return "Audio only";
+  let label = f.height ? f.height + "p" : "Video";
+  if (f.fps && f.fps > 30) label += " " + Math.round(f.fps) + "fps";
+  return label;
+}
+
+function summarizeSelection(sel = {}) {
+  const parts = [];
+  if (sel.label) {
+    parts.push(sel.label);
+  } else if (sel.audioOnly) {
+    parts.push("Audio");
+  } else if (sel.formatId) {
+    parts.push(sel.formatId + (sel.formatExt ? ` · ${sel.formatExt}` : ""));
+  } else if (sel.resolution && sel.resolution !== "best") {
+    parts.push(sel.resolution + "p");
+  }
+  if (sel.playlist) parts.push("Playlist");
+  const chapters = sel.chapters;
+  if (chapters === "embed") parts.push("chapters embed");
+  else if (chapters === "split") parts.push("split chapters");
+  const subs = sel.subs;
+  if (subs && subs.on) {
+    let tag = "subs";
+    if (subs.embed) tag += " embed";
+    if (subs.auto) tag += " auto";
+    parts.push(tag);
+  }
+  return parts.join(" · ");
+}
+
+function renderQueue(queue) {
+  const section = el("queueSection");
+  const list = el("queueList");
+  const waiting = (Array.isArray(queue) ? queue : []).filter((it) => it && it.status === "queued");
+  section.hidden = waiting.length === 0;
+  list.textContent = "";
+  waiting.forEach((it, i) => {
+    const row = document.createElement("li");
+    row.className = "qrow";
+
+    const pos = document.createElement("span");
+    pos.className = "qpos";
+    pos.textContent = String(i + 1);
+
+    const info = document.createElement("span");
+    info.className = "qinfo";
+    const title = document.createElement("span");
+    title.className = "qtitle";
+    title.textContent = (it.selection && it.selection.title) || it.url || "";
+    title.title = title.textContent;
+    const opts = document.createElement("span");
+    opts.className = "qopts";
+    opts.textContent = summarizeSelection(it.selection) || "queued";
+    opts.title = opts.textContent;
+    info.append(title, opts);
+
+    const btns = document.createElement("span");
+    btns.className = "qbtns";
+    const move = (delta) => {
+      const newIndex = i + delta;
+      if (newIndex < 0 || newIndex >= waiting.length) return;
+      send({ action: "reorder", queueId: it.id, newIndex });
+    };
+    const up = document.createElement("button");
+    up.type = "button";
+    up.className = "btn qbtn";
+    up.textContent = "\u2191";
+    up.title = "Move earlier";
+    up.setAttribute("aria-label", "Move earlier");
+    up.disabled = i === 0;
+    up.addEventListener("click", () => move(-1));
+    const down = document.createElement("button");
+    down.type = "button";
+    down.className = "btn qbtn";
+    down.textContent = "\u2193";
+    down.title = "Move later";
+    down.setAttribute("aria-label", "Move later");
+    down.disabled = i === waiting.length - 1;
+    down.addEventListener("click", () => move(1));
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "btn qbtn qbtn-rm";
+    rm.textContent = "\u2715";
+    rm.title = "Remove from queue";
+    rm.setAttribute("aria-label", "Remove from queue");
+    rm.addEventListener("click", () => send({ action: "cancel", queueId: it.id }));
+    btns.append(up, down, rm);
+
+    row.append(pos, info, btns);
+    list.appendChild(row);
+  });
 }
 
 function onHostEvent(snapshot) {
   if (snapshot.status === "downloading") {
+    el("opts").hidden = false;
     el("progress").hidden = false;
-    el("downloadBtn").hidden = true;
-    el("downloadBtn").disabled = true;
+    el("downloadBtn").hidden = false;
+    el("downloadBtn").disabled = false;
     el("cancelBtn").hidden = false;
     setProgress(snapshot.pct ?? 0);
     const d = snapshot.downloaded, t = snapshot.total;
     el("dlSize").textContent = t != null
       ? fmtBytes(d != null ? d : 0) + " / ~" + fmtBytes(t)
       : (d != null ? fmtBytes(d) + " downloaded" : "");
-    el("speed").textContent = snapshot.speed ? `speed ${snapshot.speed}` : "";
-    el("speed").textContent += snapshot.eta ? ` · ${snapshot.eta} left` : "";
+    const speedParts = [];
+    if (snapshot.speed) speedParts.push(`speed ${snapshot.speed}`);
+    if (snapshot.eta) speedParts.push(`${snapshot.eta} left`);
+    el("speed").textContent = speedParts.join(" · ");
     el("msg").textContent = snapshot.message || "";
   } else if (snapshot.status === "done") {
     el("progress").hidden = true;
@@ -548,16 +693,31 @@ function onHostEvent(snapshot) {
     setWarn(null);
     el("msg").textContent = "Error: " + (snapshot.message || "unknown");
   }
+  renderQueue(snapshot.queue || []);
 }
 
 function startDownload() {
   url = el("url").value.trim();
   if (!url) return;
+  if (!probeData || !probeData.meta) {
+    setWarn("Detect a video URL first.");
+    return;
+  }
+  // The field may have moved on since the last probe (manual edit sets
+  // urlTouched, which stops the tab-follow auto-probe); re-detect instead of
+  // silently shipping the previous video's title/format/subtitle selection
+  // against the new URL.
+  if (probeData.sourceUrl !== url) {
+    setWarn("URL changed since Detect — re-detecting…");
+    probe();
+    return;
+  }
   savePrefs();
   setWarn(null);
   send({ action: "download", url, selection: buildSelection() }).then((r) => {
     if (!r || !r.ok) {
-      el("msg").textContent = "Error: " + ((r && r.error) || "could not start");
+      const err = (r && r.error) || "could not start";
+      el("msg").textContent = "Error: " + (swGone(err) ? SW_GONE_MSG : err);
       el("progress").hidden = false;
     }
   });
@@ -565,6 +725,10 @@ function startDownload() {
 
 document.addEventListener("DOMContentLoaded", async () => {
   await loadPrefs();
+  // Honor a persisted playlist preference set in Options: otherwise every
+  // reopen resets playlistTouched to false and renderProbe() overrides the
+  // stored default (re-checking the box on playlists, unchecking on videos).
+  playlistTouched = !!prefs.playlist;
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   el("subsOpts").hidden = !prefs.subsOn;
@@ -582,23 +746,40 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // Ask for host state first: a download already running (from a previous
   // popup session) must reopen as the live progress view, never a fresh probe
-  // that wipes it. A same-URL reopen also restores the cached probe instead of
-  // re-fetching and forgetting the options.
+  // that wipes it. The queue list below it renders too, and the reopen keeps
+  // going (cached probe / auto-probe) so adding more downloads stays possible
+  // while the queue drains. A probe is safe while a download runs — it runs off
+  // the host's main loop and never touches the progress view — so a new URL
+  // always auto-detects, which is what lets a second video be lined up.
   const { state } = await send({ action: "getState" });
-  if (state && state.status === "downloading") {
-    onHostEvent(state);
-    return;
-  }
+  if (state) onHostEvent(state);
 
   const target = el("url").value.trim();
   if (!target) return;
 
   const cached = await loadProbeCache();
   if (cached && cached.url === target) {
-    renderProbe(cached.data);
-    return;
+    renderProbe(cached.data, cached.url);
+  } else {
+    probe();
   }
-  probe();
+
+  // The tab can keep navigating while the popup is open (video sites are SPAs,
+  // autoplay advances). Follow it so the field and the probe never stay stuck
+  // on the link the popup happened to open with.
+  if (tab && tab.id != null) {
+    const onTabUpdated = (id, info) => {
+      if (id !== tab.id || !info.url) return;
+      if (urlTouched || !info.url.startsWith("http")) return;
+      if (info.url === el("url").value.trim()) return;
+      el("url").value = info.url;
+      probe();
+    };
+    chrome.tabs.onUpdated.addListener(onTabUpdated);
+    window.addEventListener("unload", () =>
+      chrome.tabs.onUpdated.removeListener(onTabUpdated)
+    );
+  }
 });
 
 el("subsOn").addEventListener("change", (e) => {
@@ -611,6 +792,16 @@ el("autoSubs").addEventListener("change", () => {
 });
 el("langs").addEventListener("change", () => {
   prefs.langs = el("langs").value;
+  // "all" with auto-captions resolves to the site's default auto track; pin the
+  // concrete code so the visible selection and the saved pref match the wire
+  // value buildSelection() sends.
+  if (prefs.langs === "all" && el("autoSubs").checked) {
+    prefs.langs = defaultAutoTrack();
+    el("langs").value = prefs.langs;
+    // The decorated select only re-syncs its label on a change event (the
+    // MutationObserver can't see an IDL .value set).
+    el("langs").dispatchEvent(new Event("change", { bubbles: true }));
+  }
   prefs.langsTouched = true;
   savePrefs();
 });
@@ -628,6 +819,7 @@ el("playlist").addEventListener("change", () => {
   prefs.playlist = el("playlist").checked;
   savePrefs();
 });
+el("url").addEventListener("input", () => { urlTouched = true; });
 el("url").addEventListener("keydown", (e) => { if (e.key === "Enter") probe(); });
 el("probeBtn").addEventListener("click", probe);
 el("downloadBtn").addEventListener("click", startDownload);

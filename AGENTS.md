@@ -1,8 +1,9 @@
 # AGENTS.md
 
 Chromium/Brave-Origin extension + local yt-dlp native host. Extension sends
-`ping`/`probe`/`download`/`cancel`/`theme` JSON over a native-messaging port;
-the Python host runs yt-dlp and streams `start`/`progress`/`file`/`done`/`error`/`cancelled`.
+`ping`/`probe`/`download`/`cancel`/`reorder`/`getQueue`/`theme` JSON over a
+native-messaging port; the Python host runs yt-dlp and streams
+`queue`/`start`/`progress`/`file`/`done`/`error`/`cancelled`.
 Companion pattern to the Omarchy "Download Video" extension (match its OSD
 glyphs/toast style) and its design system (popup/options follow the live
 Omarchy theme via the host's read-only `theme` action).
@@ -12,11 +13,12 @@ Omarchy theme via the host's read-only `theme` action).
 | Path | Role |
 |---|---|
 | `extension/` | MV3 extension (no build step; loaded unpacked straight from this dir) |
-| `extension/background-2.js` | owns the single native port, routes messages, 200s probe timeout, ~4s `theme` cache (filename is versioned — see Gotchas) |
+| `extension/background-3.js` | owns the single native port, routes messages + the download queue, 200s probe timeout, ~4s `theme` cache (filename is versioned — see Gotchas) |
 | `extension/theme.js` | resolves the host's raw `theme` payload into CSS variables on `:root`; on `getTheme` failure it does **not** re-apply a palette — it labels the header `… · offline` and records the reason in `data-theme-error` |
 | `extension/controls.js` | decorates native selects/checkboxes (custom dropdown + pill toggle) without touching `popup.js`/`options.js` logic |
+| `extension/defaults.js` | single canonical `DEFAULTS` map shared by `popup.js` and `options.js` (both write the same `chrome.storage.local` namespace — a second copy is how default values drift between pages) |
 | `extension/theme.css` | shared Omarchy design-system layer; `:root` holds the **single** Solitude fallback palette (first-paint/no-JS guard) plus layout tokens |
-| `extension/popup.{html,js,css}` | main UI; `popup.js` is the big file (~550 lines) |
+| `extension/popup.{html,js,css}` | main UI; `popup.js` is the big file (~815 lines) |
 | `extension/options.{html,js,css}` | defaults via `chrome.storage.local` |
 | `host/najm-ytdlp-host` | single-file stdlib-only Python host (4-byte LE length-prefixed JSON on stdio) |
 | `host/com.najm.ytdlp.json.tpl` | NativeMessagingHosts manifest template |
@@ -42,7 +44,7 @@ the popup header showing `solitude · offline` is the tell-tale of a stale SW.
 
 ## Theme pipeline (live Omarchy colors)
 
-`background-2.js` handles `getTheme` with a ~4s cache: it forwards the request
+`background-3.js` handles `getTheme` with a ~4s cache: it forwards the request
 over the native port; the host reads `~/.local/state/omarchy/current/theme/`
 (`colors.toml` + `shell.toml` + `theme.name`, plus the `~/.config/omarchy/
 shell.toml` machine overlay) and replies without ever invoking yt-dlp.
@@ -83,16 +85,30 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
 - **Chromium caches MV3 service workers for `--load-extension` extensions and
   a window close can leave `chrome.exe`-style background processes that keep
   the stale worker alive.** The SW file is therefore versioned
-  (`background-2.js`, same trick as Omarchy's `copy-url`): bump the filename on
+  (`background-3.js`, same trick as Omarchy's `copy-url`): bump the filename on
   any SW logic change, then reload from `chrome://extensions` or fully quit the
-  browser. Symptoms of a stale SW: `getTheme` fails and the popup header shows
-  `solitude · offline`.
+  browser. Symptoms of a stale SW: every `runtime.sendMessage` fails with
+  `Could not establish connection. Receiving end does not exist.` (shown as a
+  probe error / red host dot), `getTheme` fails, and the popup header shows
+  `solitude · offline`. The popup/`theme.js` map that exact error to a "reload
+  the extension" hint; code cannot fix it — only a reload/heal can.
 - Host **hardcodes** `/usr/bin/yt-dlp` and `/usr/bin/ffmpeg` (lines 32-33); ping
   reports their existence, not PATH lookup.
 - Headless / custom `--user-data-dir` runs expect `com.najm.ytdlp.json` inside
   the profile's `NativeMessagingHosts/`, not `~/.config/...`.
 - Set `NDLP_NO_OMARCHY=1` when driving the host by hand to suppress the OSD and
   toasts (`omarchy-osd`, `omarchy-notification-send`).
+- The download OSD's stacked title-over-bar layout comes from a **user clone**,
+  `~/.config/omarchy/plugins/najm.osd/` (stock `omarchy.osd` in
+  `/usr/share/omarchy/shell/plugins/osd/` renders *either* a bar *or* a
+  message). It was created with `omarchy plugin clone omarchy.osd` and must not
+  be edited in place under `/usr/share/omarchy/` (package-owned, wiped on
+  update). Keep `OsdModel.js`'s `readout` field and `stacked`/bar logic in sync
+  with what `osd_progress()` sends; an `omarchy update` may prompt to restore
+  `omarchy.osd`, in which case re-clone and re-apply the two-file change. QML
+  edits here need `omarchy restart shell` — the plugin watcher only logs
+  `Local plugin changed, reloading`, it does **not** re-instantiate the running
+  OSD panel (so an edit can look ignored until a full shell restart).
 
 ## Host security invariants (don't weaken when editing)
 
@@ -139,30 +155,92 @@ output actually mentions 429/rate-limiting; otherwise a generic
 cancellable, runs in a scratch dir (discarded — no subtitle files leak into
 the output dir), and reports `"cancelled"` when the user hits Cancel mid-probe.
 
-## Downloading toast
+## Download queue
 
-While a download runs the host shows an in-progress toast (summary
-`Downloading`, body = `<video name> · <pct>%`, refreshed ~1s in place via
-`-r <id>`) plus the OSD; `notify_dismiss_downloading()` removes the toast on
-every exit path before the final `notify_done`/`notify_many`/`notify_error`
-toast fires. The video name travels as `selection.title` (probe `meta.title`,
-playlist `meta.sample`) from `popup.js` → host — **not** a new `NJDP:` tag, so
-it adds no parser coupling. Toast helpers (`notify_downloading`,
-`notify_dismiss_downloading`) skip entirely under `NDLP_NO_OMARCHY` (unlike
-the end-of-download toasts, which still fall back to `notify-send`); the
-refresh is throttled via `_toast_refresh` and also runs during the subtitle
-lock probe's retry backoffs so the toast doesn't expire mid-probe.
+The native host owns the queue (it survives popup/SW death): at most one
+`active_job` downloads at a time and every further `download` request joins a
+FIFO `wait_queue`, replying `{ok:true, queueId}`. `finish_job()` auto-promotes
+the next job after done **or error or cancel**, so one bad video never stalls
+the rest and a cancel aimed at the active item starts the next one. Every
+mutation broadcasts a `queue` event: `[{id, url, status:"downloading",
+position, selection}, {status:"queued", ...}, ...]` (active first, oldest
+waiting last). The per-active-job stream (`start`/`progress`/`file`/`done`/
+`error`/`cancelled`) is unchanged.
+
+- `cancel` with a `queueId` just removes that waiting item (nothing to tear
+  down; an id that isn't waiting anymore — it was just promoted — is a no-op
+  `not found`); `cancel` without one terminates the active job and advances
+  the queue.
+- `reorder {queueId, newIndex}` moves a *waiting* item; `newIndex` is a 0-based
+  index in the waiting subgroup (validated + clamped in the host).
+- `getQueue` returns the same snapshot as the `queue` event (used by the SW's
+  restart authority check).
+- Echoed selections are host-sanitized field-by-field with the exact
+  `build_command()` whitelists, plus a display-only `label`
+  (`RE_LABEL`, ≤80 safe chars — set by the popup for queue rows, never passed
+  to yt-dlp). The snapshot is therefore safe to re-submit after a restart.
+- `finish_job(job)` is *idempotent per job* and `download_worker` wraps the
+  real body (`_download_worker`) in `try/finally`, so an unexpected exception
+  — or a closed browser-side stdout, which `send()` now swallows — can never
+  leave `active_job` set and wedge the queue; the wrapper also emits a
+  terminal `error` event so the popup doesn't hang in the progress view.
+
+**Persistence/restore:** the service worker mirrors `state.queue` into
+`chrome.storage.local` (key `downloadQueue`, throttled ~1/s, removed when the
+queue empties). On `onStartup`/`onInstalled` it asks the host `getQueue` — if
+the host already owns a queue (it outlived an extension reload) the host wins
+and storage is overwritten; only when the host is idle does it re-submit the
+saved jobs (`{action:"download", url, selection}`) in order, former active
+first, then clear storage. A browser restart restarts the active item from
+scratch — there is no yt-dlp resume wiring.
+
+## Downloading progress (OSD only)
+
+While a download runs the host shows **no notification at all** — progress
+lives solely in the bottom-center Omarchy OSD (`osd_progress()`, title over a
+progress bar + %). There is intentionally no in-progress toast: an earlier
+`Downloading` notification re-sent ~1/s (even replaced in place via `-r`) made
+Omarchy's notification service write a new `~/.local/state/omarchy/
+notifications/history/` entry every tick, spamming the notification center.
+End-of-download toasts (`notify_done`/`notify_many`/`notify_error`) are
+unchanged and still fall back to `notify-send`; the progress OSD is
+Omarchy-only and absent when `NDLP_NO_OMARCHY`/no shell.
+
+The stacked title-over-bar rendering comes from Omarchy **`omarchy.osd`
+cloned as `najm.osd`** (installed via `omarchy plugin clone omarchy.osd`, see
+Gotchas) — stock Omarchy draws *either* a bar *or* a message, never both
+(`OsdModel.js` forced `hasProgress=false` whenever a message was passed). The
+host keeps calling `omarchy osd -i <glyph> -m <title> -p <pct> -d 8000`
+unchanged; the clone renders it vertically. `_osd_refresh()` re-shows the OSD
+~1/s (throttled), including during the subtitle lock probe's retry backoffs
+and per-attempt clock thread, so the 8s card doesn't expire mid-probe; every
+exit path calls `osd_close()`. Clicking the card hides it: the clone sets a
+`dismissed` flag so the download's ~1/s refreshes can't pop it straight back
+up, re-arming only once those refreshes stop (or when the host's `osd_close()`
+resets it), while volume/brightness/media OSDs are never suppressed. The card
+is the only interactive part of the surface (`mask: Region` covers just it),
+so the desktop stays clickable. The video name travels as `selection.title`
+(probe `meta.title`, playlist `meta.sample`) from `popup.js` → host — **not** a
+new `NJDP:` tag, so it adds no parser coupling.
 
 ## Popup reopen behavior
 
 Popup `DOMContentLoaded` asks the host for state **before** auto-probing the
 active tab: if a download is running from a previous popup session it reopens
-as the live progress view (no fresh probe, nothing wiped). On an idle reopen it
-restores the last probe result for the exact same URL from
-`chrome.storage.session` (`lastProbe` cache written on successful probes) so
-the previously chosen options/estimate reappear instantly without a refetch;
-only a URL change or the manual Probe button triggers a new probe. The cache is
-session-scoped and lost on browser restart/extension reload.
+as the live progress view with the waiting queue rendered below it (nothing
+wiped). A probe is safe while a download runs — it runs on its own host thread
+(so it can't stall Cancel) and never touches the progress view — so a URL
+change **always** auto-probes even mid-download, which is what lets a second
+video be lined up in the queue. On a reopen it restores the last probe result
+for the exact same URL from `chrome.storage.session` (`lastProbe` cache written
+on successful probes) so the previously chosen options/estimate reappear
+instantly without a refetch; only a URL change or the manual Probe button
+triggers a new probe. The popup also follows the active tab while it stays open
+(`chrome.tabs.onUpdated`) so SPA navigations / autoplay-advance don't leave it
+stuck on the link it opened with, and `probe()` keys its reply to the URL it
+was asked about (dropping superseded replies and clearing `probeData` on
+failure) so an earlier video's metadata can't land on the current one. The
+cache is session-scoped and lost on browser restart/extension reload.
 
 ## Skills
 

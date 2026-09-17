@@ -26,16 +26,27 @@ remove_native "$HOME/.config/BraveSoftware/Brave-Origin"
 strip_flags() {
   local file="$1"
   [[ -f "$file" ]] || return 0
-  local bak="${file}.najm-bak"
-  if [[ -f "$bak" ]]; then
-    mv -f "$bak" "$file"
-    echo "restored $file from backup"
+  # Always strip the flag in place — never restore the .najm-bak wholesale, or
+  # flags other tools added after install would be lost. The backup install.sh
+  # left behind stays on disk as a manual safety net.
+  if ! grep -qF -- "$EXT_DIR" "$file"; then
+    [[ -f "${file}.najm-bak" ]] && echo "no $EXT_DIR in $file (backup kept: ${file}.najm-bak)"
     return 0
   fi
-  if grep -q -- "$EXT_DIR" "$file"; then
-    sed -i -E "s~,$EXT_DIR~~g; s~^--load-extension=$EXT_DIR\$~~; s~--load-extension=$EXT_DIR,~~g" "$file"
-    sed -i '/^[[:space:]]*$/d' "$file"
-    echo "stripped $EXT_DIR from $file"
+  local esc
+  esc="$(printf '%s' "$EXT_DIR" | sed 's/[][\\.^$*?+(){}|]/\\&/g')"
+  sed -i -E \
+    -e "s~--load-extension=$esc,~--load-extension=~g" \
+    -e "s~,$esc,~,~g" \
+    -e "s~,$esc([[:space:]]|\$)~\1~g" \
+    -e "s~--load-extension=$esc([[:space:]]|\$)~--load-extension=\1~g" \
+    -e "s~[[:space:]]*--load-extension=([[:space:]]|\$)~\1~g" \
+    -e 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    "$file"
+  sed -i '/^[[:space:]]*$/d' "$file"
+  echo "stripped $EXT_DIR from $file"
+  if [[ -f "${file}.najm-bak" ]]; then
+    echo "  backup kept at ${file}.najm-bak"
   fi
 }
 strip_flags "$HOME/.config/chromium-flags.conf"

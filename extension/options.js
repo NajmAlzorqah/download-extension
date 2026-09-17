@@ -1,28 +1,26 @@
-const DEFAULTS = {
-  outDir: "~/Videos",
-  playlist: false,
-  chapters: "off",
-  subsOn: false,
-  auto: false,
-  langs: "en",
-  convertSrt: false,
-  embed: false,
-};
-
+// Defaults come from defaults.js (shared with the popup so the two pages can't
+// drift). options.js only touches keys that have an element here — popup-only
+// keys (subFormat, langsTouched) are read/written by the popup alone.
 const el = (id) => document.getElementById(id);
 
 async function load() {
   const s = await chrome.storage.local.get(null);
   for (const k of Object.keys(DEFAULTS)) {
+    const e = el(k);
+    if (!e) continue;
     const v = s[k] !== undefined ? s[k] : DEFAULTS[k];
-    el(k).value = v;
-    if (el(k).type === "checkbox") el(k).checked = v;
+    e.value = v;
+    if (e.type === "checkbox") e.checked = v;
+    // The decorated dropdown label re-syncs on a change event (its option list
+    // is static, so the MutationObserver never fires for a .value set).
+    if (e.tagName === "SELECT") e.dispatchEvent(new Event("change", { bubbles: true }));
   }
 }
 
 function save() {
   for (const k of Object.keys(DEFAULTS)) {
     const e = el(k);
+    if (!e) continue;
     chrome.storage.local.set({ [k]: e.type === "checkbox" ? e.checked : e.value });
   }
 }
@@ -50,8 +48,11 @@ el("save").addEventListener("click", () => {
 
 el("reset").addEventListener("click", async () => {
   for (const k of Object.keys(DEFAULTS)) {
-    el(k).value = DEFAULTS[k];
-    if (el(k).type === "checkbox") el(k).checked = DEFAULTS[k];
+    const e = el(k);
+    if (!e) continue;
+    e.value = DEFAULTS[k];
+    if (e.type === "checkbox") e.checked = DEFAULTS[k];
+    if (e.tagName === "SELECT") e.dispatchEvent(new Event("change", { bubbles: true }));
   }
   save();
 });

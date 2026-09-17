@@ -13,6 +13,15 @@
 
   const HEX_RE = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/;
 
+  // A stale/stopped MV3 service worker rejects the getTheme round-trip with
+  // Chrome's stock "no receiver" text; make the recorded reason actionable.
+  // Exported on window (theme.js loads before popup.js/options.js on both
+  // pages) so popup.js consumers share this single regex and message instead
+  // of keeping a second, driftable copy of their own.
+  const SW_GONE_RE = /Could not establish connection|Receiving end does not exist/;
+  const SW_GONE_DIAG =
+    "The extension's background worker isn't responding — open chrome://extensions, reload Najm Downloader, then try again.";
+
   // Fallback tokens come from theme.css `:root` (the single palette source).
   // If a token resolves empty here, apply() leaves the CSS variable unset so
   // the cascade keeps theme.css's own value — no literals cached in JS.
@@ -204,6 +213,7 @@
     } catch (err) {
       diag = String((err && err.message) || err);
     }
+    if (SW_GONE_RE.test(diag)) diag = SW_GONE_DIAG;
     el.dataset.themeError = diag || "";
     if (theme) {
       apply(theme);
@@ -215,6 +225,8 @@
   }
 
   window.applyOmarchyTheme = applyLive;
+  window.SW_GONE_RE = SW_GONE_RE;
+  window.SW_GONE_DIAG = SW_GONE_DIAG;
 
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", applyLive);

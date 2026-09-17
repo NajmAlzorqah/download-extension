@@ -73,7 +73,13 @@ merge_flags() {
   fi
   cp -a "$file" "${file}.najm-bak"
   if grep -q -- "--load-extension=" "$file"; then
-    sed -i -E "s~^(.*--load-extension=[^[:space:]]+)$~\1,$ext~" "$file"
+    # Append to the existing value even when the line carries other flags after
+    # it (the old pattern only matched a line that was exactly the flag). Guard
+    # against a previously-empty value producing a leading comma.
+    sed -i -E \
+      -e "s~(.*--load-extension=[^[:space:]]*)~\1,$ext~" \
+      -e "s~(--load-extension=),~\1~" \
+      "$file"
   else
     printf -- '\n--load-extension=%s\n' "$ext" >> "$file"
   fi

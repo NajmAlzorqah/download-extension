@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Generate the Najm Downloader toolbar/extension icons as PNGs.
 
-Dependency-free: draws a rounded terracotta square (matching the popup
-accent `#b5562f`) with a white download arrow into a 128px RGBA grid
+Dependency-free: draws a rounded terracotta square (a warm brand accent of its
+own — the popup's accent is driven by the live Omarchy theme, so this literal
+is not meant to track it) with a white download arrow into a 128px RGBA grid
 (4x supersampled) and writes PNGs by hand.
 """
 import struct
