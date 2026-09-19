@@ -12,6 +12,9 @@ Requests:
                                                           the active job finishes (done, error, or cancel)
   {"req": <id>, "action": "cancel"}                     -> {"req", "ok": true} (terminates the active job)
   {"req": <id>, "action": "cancel", "queueId": <id>}    -> {"req", "ok": true} (removes a waiting item)
+  {"req": <id>, "action": "pause", "paused": <bool>}   -> {"req", "ok": true} (bool=true pauses the active job
+                                                          via SIGSTOP, false resumes it via SIGCONT; no-op if the
+                                                          job already is / isn't paused)
   {"req": <id>, "action": "reorder", "queueId": <id>,
    "newIndex": <0-based waiting index>}                 -> {"req", "ok": true} (moves a waiting item)
   {"req": <id>, "action": "getQueue"}                   -> {"req", "ok": true, "queue": [...]} (snapshot like the queue event)
@@ -30,6 +33,7 @@ import os
 import re
 import glob
 import shutil
+import socket
 import struct
 import subprocess
 import sys
@@ -38,6 +42,10 @@ import threading
 import time
 import pathlib
 import tempfile
+import itertools
+import fcntl
+import select
+import signal
 from urllib.parse import urlparse
 
 HOST_NAME = "com.najm.ytdlp"
@@ -48,6 +56,21 @@ MAX_FRAME = 1 << 20
 MAX_URL = 32768
 SUB_LOCK_TIMEOUT = 120
 PROBE_TIMEOUT_S = 60
+
+# Agent (daemon) mode: when started with `--agent` the host serves the shared
+# download queue as a JSON-lines unix-socket server instead of one native-host
+# session. The default (shim) mode is a thin relay: it translates the
+# browser's 4-byte framed stdio protocol to JSON-lines on the agent socket and
+# frames the agent's replies back. The agent outlives any single client (it is
+# what makes the queue shared + persistent), and idle-exits when unneeded.
+AGENT_PREFIX = "nd"
+AGENT_SOCK_DIR = (os.environ.get("XDG_RUNTIME_DIR")
+                  or os.path.expanduser("~/.local/state"))
+AGENT_SOCK_DIR = os.path.join(AGENT_SOCK_DIR, "najm-ytdlp")
+AGENT_SOCK_PATH = os.path.join(AGENT_SOCK_DIR, "agent.sock")
+AGENT_MAX_CLIENTS = 8
+AGENT_IDLE_S = 120.0
+AGENT_SPAWN_WAIT_S = 8.0
 
 RE_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 RE_CTRL = re.compile(r"[\x00-\x1f\x7f]")
@@ -89,7 +112,79 @@ OSD_ICON_DOWNLOAD = "󰇚"
 OSD_ICON_DONE = "󰄬"
 OSD_ICON_FAIL = "󰅖"
 
-SEND_LOCK = threading.Lock()
+# Socket-routing state (agent mode only). Each connected client is a Client;
+# BROADCAST goes to all of them. REQ_OWNERS maps an internal
+# "nd<uid>:<req>" key to its owning (Client, original_req) so per-job streams
+# (`start`/`progress`/`file`/`done`/`error`/`cancelled`/`info`) and one-shot
+# acks are routed back to the client that issued the request, while `queue`
+# (and mirror) events go to everybody. A frame whose internal req has no
+# registered owner anymore (terminal already delivered, or a dropped job) is
+# discarded.
+CLIENT_LOCK = threading.Lock()
+CLIENTS = {}
+REQ_OWNERS = {}
+UID_COUNTER = itertools.count(1)
+
+
+class Client:
+    """One agent-side peer speaking JSON-lines over its unix socket."""
+
+    __slots__ = ("sock", "uid", "lock", "closed")
+
+    def __init__(self, sock):
+        self.sock = sock
+        self.uid = next(UID_COUNTER)
+        self.lock = threading.Lock()
+        self.closed = False
+
+    def send(self, obj):
+        if self.closed:
+            return
+        data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        try:
+            with self.lock:
+                self.sock.sendall(data + b"\n")
+        except OSError:
+            # The peer is gone. Mark it closed so this (or another) thread
+            # can't spin on a dead socket; the reader's finally already kicked
+            # it out of CLIENTS. This mirrors the old stdout OSError swallow:
+            # a worker must never die mid-job because its client vanished.
+            self.closed = True
+
+    def close(self):
+        self.closed = True
+        try:
+            self.sock.close()
+        except OSError:
+            pass
+
+
+def forget_req(req):
+    """Drop the owner of an internal req once its conversation is done."""
+    with CLIENT_LOCK:
+        REQ_OWNERS.pop(req, None)
+
+
+def send(obj):
+    """Route a frame: to its owning client when `req` is an internal
+    "nd<uid>:<req>" key, drop it when that owner is gone (terminal already
+    delivered), otherwise broadcast to every live client."""
+    req = obj.get("req")
+    if isinstance(req, str) and req.startswith(AGENT_PREFIX) and ":" in req:
+        with CLIENT_LOCK:
+            hit = REQ_OWNERS.get(req)
+        if hit is not None:
+            client, orig = hit
+            out = dict(obj)
+            out["req"] = orig
+            client.send(out)
+            return
+        # Owning req forgotten (terminal event already delivered) — drop.
+        return
+    with CLIENT_LOCK:
+        live = list(CLIENTS.values())
+    for c in live:
+        c.send(obj)
 
 # Download queue coordination. At most one job downloads at a time
 # (`active_job`); every further `download` request is appended to `queue` and
@@ -114,20 +209,6 @@ PROBE_CACHE_MAX = 8
 PROBE_LOCK = threading.Lock()
 probe_waiters = {}
 probe_cache = {}
-
-
-def send(obj):
-    data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
-    try:
-        with SEND_LOCK:
-            sys.stdout.buffer.write(struct.pack("<I", len(data)))
-            sys.stdout.buffer.write(data)
-            sys.stdout.buffer.flush()
-    except OSError:
-        # The browser-side endpoint is gone (pipe closed). Swallow it so a
-        # worker thread can't die mid-job and leave the queue wedged — the
-        # main loop exits on stdin EOF anyway.
-        pass
 
 
 def sanitize_selection(sel):
@@ -205,7 +286,7 @@ def queue_snapshot():
             items.append({
                 "id": active_job["id"],
                 "url": active_job["url"],
-                "status": "downloading",
+                "status": "paused" if active_job.get("paused") else "downloading",
                 "position": 1,
                 "selection": active_job["selection"],
             })
@@ -225,6 +306,7 @@ def send_queue():
 
 
 def start_worker(job):
+    inflight_inc()
     threading.Thread(target=download_worker, args=(job,), daemon=True).start()
 
 
@@ -244,6 +326,11 @@ def finish_job(job=None):
     with STATE_LOCK:
         if job is not None and active_job is not job:
             return
+        if active_job is not None:
+            # A paused job's flag must not survive into the next job: scrub it
+            # here (all terminal paths — done/error/cancel — funnel through
+            # finish_job) so a paused cancel → promote next starts unpaused.
+            active_job["paused"] = False
         active_job = None
         if wait_queue:
             active_job = wait_queue.pop(0)
@@ -570,6 +657,9 @@ def _reply_probe(req, payload, err):
         send({"req": req, "ok": False, "error": err or "probe failed"})
     else:
         send({"req": req, "ok": True, **payload})
+    # One reply per probe req; drop the owner so REQ_OWNERS can't grow with a
+    # long-lived client's probe history.
+    forget_req(req)
 
 
 def probe_worker(req, url):
@@ -586,7 +676,18 @@ def probe_worker(req, url):
     the same fan-out result. Results land in a short TTL-bounded cache so the
     popup's auto-reprobe / re-submit codepaths don't trigger a fresh network
     round-trip within a minute.
+
+    `inflight_inc()` is paired with every exit path (cache hit, waiters-park,
+    and the real run via the wrapper's finally) so the agent's idle watchdog
+    never kills a still-running probe.
     """
+    try:
+        _probe_worker(req, url)
+    finally:
+        inflight_dec()
+
+
+def _probe_worker(req, url):
     now = time.monotonic()
     with PROBE_LOCK:
         hit = probe_cache.get(url)
@@ -967,6 +1068,8 @@ def download_worker(job):
                 pass
     finally:
         finish_job(job)
+        forget_req(job.get("req"))
+        inflight_dec()
 
 
 def _download_worker(job):
@@ -1122,6 +1225,22 @@ def _download_worker(job):
         # path handles it promptly.
         if _cancel_pending():
             proc.terminate()
+        # A pause can land while no proc is spawned yet — most notably during
+        # the subtitle lock probe, which runs before this first run_one() while
+        # only lock_proc is set, and again in the retry gap (the caller
+        # re-invokes run_one below). The pause handler SIGSTOPs current_proc
+        # only, so a stop issued against a None proc just sets the flag and is
+        # now applied here: a paused child stops immediately instead of running
+        # at full speed under a "paused" headline. The cancel check above takes
+        # precedence — a cancelled job is killed, never stopped (terminating a
+        # SIGSTOP'd process would wedge the worker on a never-closing pipe).
+        with STATE_LOCK:
+            should_stop = active_job.get("paused") and not cancel_flag
+        if should_stop and proc.poll() is None:
+            try:
+                proc.send_signal(signal.SIGSTOP)
+            except Exception:
+                pass
         errors = []
         last_ev = [0.0]
         titles = {}
@@ -1153,6 +1272,12 @@ def _download_worker(job):
                 if now - last_ev[0] >= 0.25:
                     last_ev[0] = now
                     send({"req": req, "event": "progress",
+                          "pct": round(pct, 1), "speed": speed, "eta": eta,
+                          "downloaded": downloaded, "total": total})
+                    # Coarse mirror progress, broadcast req-less so popup and
+                    # widget both see any job's progress without owning its
+                    # req stream. `queueId` lets readers attach it to a row.
+                    send({"event": "progress", "queueId": job["id"],
                           "pct": round(pct, 1), "speed": speed, "eta": eta,
                           "downloaded": downloaded, "total": total})
                 if osd_available():
@@ -1272,137 +1397,478 @@ def _download_worker(job):
 
 # ------------------------------------------------------------------- main ---
 
-def main():
+def bind_agent_socket():
+    """Create/lock the agent unix socket. Returns the listening socket, or
+    None when another agent is already serving (callers exit quietly).
+
+    Single-instance is the flock on `agent.lock`: a crashed agent releases it
+    but can leave a stale socket file, so after winning the lock we unlink any
+    leftover file (no other bound socket can exist — we hold the lock) and
+    bind fresh. The socket and its directory are user-only (0600/0700): the
+    peer is same-user local IPC, not a trust boundary — requests are still
+    sanitized exactly like the stdio host's.
+    """
+    os.makedirs(AGENT_SOCK_DIR, mode=0o700, exist_ok=True)
+    lock_path = os.path.join(AGENT_SOCK_DIR, "agent.lock")
+    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(lock_fd)
+        return None
+    try:
+        os.unlink(AGENT_SOCK_PATH)
+    except OSError:
+        pass
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.bind(AGENT_SOCK_PATH)
+    os.chmod(AGENT_SOCK_PATH, 0o600)
+    sock.listen(AGENT_MAX_CLIENTS)
+    sock.setblocking(True)
+    return sock
+
+
+def agent_connect():
+    """Connect to a running agent, spawning one if the socket is missing."""
+    def try_connect():
+        try:
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            s.connect(AGENT_SOCK_PATH)
+            return s
+        except OSError:
+            s.close()
+            return None
+
+    s = try_connect()
+    if s is not None:
+        return s
+    # Lazy-spawn the daemon. stdout MUST be /dev/null: this host's stdout is
+    # the browser's native-messaging pipe, and if the agent inherited it the
+    # pipe would stay open after the shim exits, hiding the disconnect.
+    try:
+        subprocess.Popen(
+            [sys.executable, os.path.realpath(sys.argv[0]), "--agent"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+            close_fds=True)
+    except OSError:
+        return None
+    deadline = time.monotonic() + AGENT_SPAWN_WAIT_S
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+        s = try_connect()
+        if s is not None:
+            return s
+    return None
+
+
+# In-flight worker accounting: a probe or download thread is running. The
+# agent only idle-exits when nothing is in flight (a download keeps its job
+# in active_job, but a lone probe has no queue entry to check).
+INFLIGHT_LOCK = threading.Lock()
+inflight = 0
+
+
+def inflight_inc():
+    global inflight
+    with INFLIGHT_LOCK:
+        inflight += 1
+
+
+def inflight_dec():
+    global inflight
+    with INFLIGHT_LOCK:
+        inflight = max(0, inflight - 1)
+
+
+SOCK_CLOSE_MARK = ("__close__",)
+
+
+def client_reader(client, requests):
+    """Read JSON-lines from one socket client and queue them for dispatch.
+
+    Each frame's `req` is rewritten to the internal "nd<uid>:<raw>" key and
+    registered with its owner, so the serialized handler (and the job/probe
+    worker threads that share it) route replies back to the right peer even
+    though every popup/widget starts its own req sequence at 1.
+
+    On peer EOF the client is NOT closed here: the socket must stay writable
+    until the dispatcher has sent the replies promised for the frames already
+    queued. Instead a SOCK_CLOSE_MARK is queued *after* those frames; the
+    dispatcher closes the client only once it has drained past them (FIFO
+    guarantees the mark follows every frame this reader enqueued).
+    """
+    buf = b""
+    try:
+        while True:
+            data = client.sock.recv(65536)
+            if not data:
+                break
+            buf += data
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                line = line.strip()
+                if not line or len(line) > MAX_FRAME:
+                    continue
+                try:
+                    obj = json.loads(line.decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                raw_req = obj.get("req")
+                if raw_req is not None:
+                    mangled = "%s%d:%s" % (AGENT_PREFIX, client.uid, raw_req)
+                    with CLIENT_LOCK:
+                        REQ_OWNERS[mangled] = (client, raw_req)
+                    obj = dict(obj)
+                    obj["req"] = mangled
+                requests.put(obj)
+    except OSError:
+        pass
+    finally:
+        requests.put(SOCK_CLOSE_MARK + (client.uid,))
+
+
+def handle_request(frame):
+    """Serialized dispatch of one request frame (shared by all clients)."""
     global current_proc, cancel_flag, lock_proc, active_job, next_job_id
+    req = frame.get("req")
+    action = frame.get("action")
+
+    if action == "cancel":
+        target = frame.get("queueId")
+        if isinstance(target, int):
+            # A queueId-cancel targets a *waiting* item only. An id that
+            # isn't among the waiters anymore (it was just promoted to
+            # active, or already removed) is a no-op — never cancel the
+            # running job because of a stale Remove click.
+            removed = None
+            with STATE_LOCK:
+                for i, j in enumerate(wait_queue):
+                    if j["id"] == target:
+                        removed = j
+                        wait_queue.pop(i)
+                        break
+            if removed is not None:
+                # This job's per-originator stream is gone with it (it was
+                # waiting — nothing was ever spawned for it), so its owner
+                # entry is dead weight until this client disconnects; scrub it.
+                forget_req(removed["req"])
+                send({"req": req, "ok": True})
+                send_queue()
+            else:
+                send({"req": req, "ok": False, "error": "not found"})
+            forget_req(req)
+            return
+        # No queueId: cancel the active job.
+        with STATE_LOCK:
+            proc = current_proc
+            lproc = lock_proc
+            was_paused = active_job is not None and active_job.get("paused") is True
+            if active_job is not None:
+                cancel_flag = True
+        if proc is not None and was_paused:
+            # A SIGSTOP'd child doesn't process SIGTERM (and never writes to or
+            # closes its stdout), which would wedge the worker's read loop on a
+            # never-closing pipe. Continue it first so the terminate below
+            # lands and teardown is prompt.
+            try:
+                os.kill(proc.pid, signal.SIGCONT)
+            except Exception:
+                pass
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        if lproc is not None:
+            try:
+                lproc.terminate()
+            except Exception:
+                pass
+        send({"req": req, "ok": True})
+        forget_req(req)
+        return
+
+    if action == "pause":
+        paused = frame.get("paused") is True
+        with STATE_LOCK:
+            if active_job is None:
+                send({"req": req, "ok": False, "error": "no active download"})
+                forget_req(req)
+                return
+            already = active_job.get("paused") is True
+            if paused and not already:
+                active_job["paused"] = True
+            elif not paused and already:
+                active_job["paused"] = False
+            proc = current_proc
+        if proc is not None and paused != already:
+            try:
+                # Pause at the OS level: yt-dlp has no native pause, so
+                # SIGSTOP/SIGCONT stop/resume the running subprocess. Only
+                # issued on an actual state change — a second SIGSTOP on an
+                # already-stopped process would need a second SIGCONT to undo.
+                proc.send_signal(signal.SIGSTOP if paused else signal.SIGCONT)
+            except Exception:
+                pass
+        send({"req": req, "ok": True})
+        send_queue()
+        forget_req(req)
+        return
+
+    if action == "ping":
+        send({"req": req, "ok": True, "host": HOST_NAME,
+              "ytdlp": os.path.exists(YTDLP), "ffmpeg": os.path.exists(FFMPEG)})
+        forget_req(req)
+        return
+
+    if action == "probe":
+        url = http_url(frame.get("url"))
+        if url is None:
+            send({"req": req, "ok": False, "error": "Unsupported URL"})
+            forget_req(req)
+            return
+        inflight_inc()
+        threading.Thread(target=probe_worker, args=(req, url), daemon=True).start()
+        return
+
+    if action == "download":
+        url = http_url(frame.get("url"))
+        if url is None:
+            send({"req": req, "event": "error", "message": "Unsupported URL"})
+            forget_req(req)
+            return
+        sel = sanitize_selection(frame.get("selection"))
+        with STATE_LOCK:
+            jid = next_job_id
+            next_job_id += 1
+            job = {"id": jid, "req": req, "url": url, "selection": sel}
+            if active_job is None:
+                active_job = job
+                cancel_flag = False
+                start_worker(job)
+            else:
+                wait_queue.append(job)
+        send({"req": req, "ok": True, "queueId": jid})
+        send_queue()
+        return
+
+    if action == "getQueue":
+        send({"req": req, "ok": True, "queue": queue_snapshot()})
+        forget_req(req)
+        return
+
+    if action == "reorder":
+        target = frame.get("queueId")
+        new_idx = frame.get("newIndex")
+        if not (isinstance(target, int) and isinstance(new_idx, int) and new_idx >= 0):
+            send({"req": req, "ok": False, "error": "invalid reorder"})
+            forget_req(req)
+            return
+        with STATE_LOCK:
+            target_idx = None
+            for i, j in enumerate(wait_queue):
+                if j["id"] == target:
+                    target_idx = i
+                    break
+            if target_idx is None:
+                missing = True
+            else:
+                missing = False
+                item = wait_queue.pop(target_idx)
+                wait_queue.insert(min(new_idx, len(wait_queue)), item)
+        if missing:
+            send({"req": req, "ok": False, "error": "not found"})
+        else:
+            send({"req": req, "ok": True})
+            send_queue()
+        forget_req(req)
+        return
+
+    if action == "theme":
+        theme = read_theme()
+        if theme is None:
+            send({"req": req, "ok": False, "error": "no theme available"})
+        else:
+            send({"req": req, "ok": True, "theme": theme})
+        forget_req(req)
+        return
+
+    send({"req": req, "ok": False, "error": "unknown action"})
+    forget_req(req)
+
+
+def agent_main():
+    sock = bind_agent_socket()
+    if sock is None:
+        return
     requests = queue.Queue()
 
-    def reader():
+    def accept_loop():
+        while True:
+            try:
+                conn, _ = sock.accept()
+            except OSError:
+                return
+            client = Client(conn)
+            with CLIENT_LOCK:
+                if len(CLIENTS) >= AGENT_MAX_CLIENTS:
+                    client.close()
+                    continue
+                CLIENTS[client.uid] = client
+            threading.Thread(target=client_reader,
+                             args=(client, requests), daemon=True).start()
+
+    threading.Thread(target=accept_loop, daemon=True).start()
+
+    def watchdog():
+        # Idle-exit: no clients, no queue, nothing downloading/probing for
+        # AGENT_IDLE_S. The agent is spawned detached by shims; this keeps it
+        # from accumulating as immortal background processes across browser
+        # sessions. Note: while the Omarchy widget is running it holds a
+        # connection and pings every ~15s, so n_clients ≥ 1 makes the idle
+        # exit unreachable by design — it only fires once the bar/widget and
+        # browsers are all gone. Do not "fix" that by ignoring pings; the
+        # widget staying connected is the point.
+        quiet_since = time.monotonic()
+        while True:
+            time.sleep(5)
+            with CLIENT_LOCK:
+                n_clients = len(CLIENTS)
+            with STATE_LOCK:
+                busy = active_job is not None or bool(wait_queue)
+            with INFLIGHT_LOCK:
+                working = inflight > 0
+            if n_clients or busy or working:
+                quiet_since = time.monotonic()
+            elif time.monotonic() - quiet_since >= AGENT_IDLE_S:
+                os._exit(0)
+
+    threading.Thread(target=watchdog, daemon=True).start()
+
+    while True:
+        item = requests.get()
+        if isinstance(item, tuple) and item and item[0] == "__close__":
+            # Peer EOF'd (or errored). All frames this reader enqueued have
+            # been dispatched past FIFO, so it is now safe to drop the
+            # client: scrub its req owners (no reply to a vanished peer is
+            # worth routing) and close the socket so send() can't spin.
+            uid = item[1]
+            with CLIENT_LOCK:
+                client = CLIENTS.pop(uid, None)
+                if client is not None:
+                    for key in [k for k, (c, _) in REQ_OWNERS.items()
+                                if c is client]:
+                        REQ_OWNERS.pop(key, None)
+            if client is not None:
+                client.close()
+            continue
+        handle_request(item)
+
+
+def shim_main():
+    """Browser-facing relay: the native 4-byte-framed stdio protocol in, the
+    agent's JSON-lines out (and back). This process is ephemeral per session;
+    the agent owns the queue and outlives it."""
+    agent = agent_connect()
+    if agent is None:
+        return 1
+    stdin_done = [False]
+
+    def pump_in():
         while True:
             frame = read_frame(sys.stdin.buffer)
             if frame is None:
-                requests.put(None)
-                return
-            requests.put(frame)
+                break
+            data = json.dumps(frame, ensure_ascii=False).encode("utf-8")
+            try:
+                agent.sendall(data + b"\n")
+            except OSError:
+                break
+        # Half-close: the agent's reader will see EOF, queue a SOCK_CLOSE_MARK
+        # after every frame it got from us, and the dispatcher closes the
+        # socket only after replying. Our recv side stays open, so pump_out
+        # drains those replies before hitting the agent's EOF.
+        try:
+            agent.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        stdin_done[0] = True
 
-    threading.Thread(target=reader, daemon=True).start()
-
-    while True:
-        frame = requests.get()
-        if frame is None:
-            break
-        req = frame.get("req")
-        action = frame.get("action")
-
-        if action == "cancel":
-            target = frame.get("queueId")
-            if isinstance(target, int):
-                # A queueId-cancel targets a *waiting* item only. An id that
-                # isn't among the waiters anymore (it was just promoted to
-                # active, or already removed) is a no-op — never cancel the
-                # running job because of a stale Remove click.
-                removed = False
-                with STATE_LOCK:
-                    for i, j in enumerate(wait_queue):
-                        if j["id"] == target:
-                            wait_queue.pop(i)
-                            removed = True
-                            break
-                if removed:
-                    send({"req": req, "ok": True})
-                    send_queue()
+    def pump_out():
+        buf = b""
+        # After stdin EOF the agent is obligated to close within its reply/EOF
+        # handshake; this deadline guards against a wedged agent.
+        last_data = time.monotonic()
+        while True:
+            try:
+                r, _, _ = select.select([agent], [], [], 0.5)
+            except OSError:
+                break
+            if not r:
+                if stdin_done[0] and time.monotonic() - last_data >= 3.0:
+                    break
+                continue
+            try:
+                data = agent.recv(65536)
+            except OSError:
+                break
+            if not data:
+                break
+            last_data = time.monotonic()
+            buf += data
+            lines = buf.split(b"\n")
+            buf = lines.pop()
+            for line in lines:
+                line = line.strip()
+                if not line or len(line) > MAX_FRAME:
                     continue
-                send({"req": req, "ok": False, "error": "not found"})
-                continue
-            # No queueId: cancel the active job.
-            with STATE_LOCK:
-                proc = current_proc
-                lproc = lock_proc
-                if active_job is not None:
-                    cancel_flag = True
-            if proc is not None:
                 try:
-                    proc.terminate()
-                except Exception:
-                    pass
-            if lproc is not None:
-                try:
-                    lproc.terminate()
-                except Exception:
-                    pass
-            send({"req": req, "ok": True})
-            continue
+                    sys.stdout.buffer.write(struct.pack("<I", len(line)))
+                    sys.stdout.buffer.write(line)
+                    sys.stdout.buffer.flush()
+                except OSError:
+                    return
+        agent.setblocking(False)
+        try:
+            while True:
+                data = agent.recv(65536)
+                if not data:
+                    break
+                for line in data.split(b"\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    sys.stdout.buffer.write(struct.pack("<I", len(line)))
+                    sys.stdout.buffer.write(line)
+                    sys.stdout.buffer.flush()
+        except OSError:
+            pass
+        try:
+            sys.stdout.buffer.flush()
+        except OSError:
+            pass
 
-        if action == "ping":
-            send({"req": req, "ok": True, "host": HOST_NAME,
-                  "ytdlp": os.path.exists(YTDLP), "ffmpeg": os.path.exists(FFMPEG)})
-            continue
+    t = threading.Thread(target=pump_in, daemon=True)
+    t.start()
+    try:
+        pump_out()
+    finally:
+        try:
+            agent.close()
+        except OSError:
+            pass
+        t.join(timeout=2)
+    return 0
 
-        if action == "probe":
-            url = http_url(frame.get("url"))
-            if url is None:
-                send({"req": req, "ok": False, "error": "Unsupported URL"})
-                continue
-            threading.Thread(target=probe_worker, args=(req, url), daemon=True).start()
-            continue
 
-        if action == "download":
-            url = http_url(frame.get("url"))
-            if url is None:
-                send({"req": req, "event": "error", "message": "Unsupported URL"})
-                continue
-            sel = sanitize_selection(frame.get("selection"))
-            with STATE_LOCK:
-                jid = next_job_id
-                next_job_id += 1
-                job = {"id": jid, "req": req, "url": url, "selection": sel}
-                if active_job is None:
-                    active_job = job
-                    cancel_flag = False
-                    start_worker(job)
-                else:
-                    wait_queue.append(job)
-            send({"req": req, "ok": True, "queueId": jid})
-            send_queue()
-            continue
-
-        if action == "getQueue":
-            send({"req": req, "ok": True, "queue": queue_snapshot()})
-            continue
-
-        if action == "reorder":
-            target = frame.get("queueId")
-            new_idx = frame.get("newIndex")
-            if not (isinstance(target, int) and isinstance(new_idx, int) and new_idx >= 0):
-                send({"req": req, "ok": False, "error": "invalid reorder"})
-                continue
-            with STATE_LOCK:
-                target_idx = None
-                for i, j in enumerate(wait_queue):
-                    if j["id"] == target:
-                        target_idx = i
-                        break
-                if target_idx is None:
-                    missing = True
-                else:
-                    missing = False
-                    item = wait_queue.pop(target_idx)
-                    wait_queue.insert(min(new_idx, len(wait_queue)), item)
-            if missing:
-                send({"req": req, "ok": False, "error": "not found"})
-                continue
-            send({"req": req, "ok": True})
-            send_queue()
-            continue
-
-        if action == "theme":
-            theme = read_theme()
-            if theme is None:
-                send({"req": req, "ok": False, "error": "no theme available"})
-            else:
-                send({"req": req, "ok": True, "theme": theme})
-            continue
-
-        send({"req": req, "ok": False, "error": "unknown action"})
+def main():
+    if "--agent" in sys.argv:
+        agent_main()
+    else:
+        sys.exit(shim_main())
 
 
 if __name__ == "__main__":

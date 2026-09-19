@@ -21,6 +21,13 @@ const state = {
   // Waiting downloads, mirror of the host's `queue` event (active item is
   // tracked by status/pct/items above).
   queue: [],
+  // id of the queue item whose progress `status`/`pct` currently reflect.
+  // Lets the queue handler tell a same-job progress blip from a promotion to
+  // a different job (which must clear stale pct).
+  activeId: null,
+  // True while the active job is SIGSTOP'd on the host (`queue` head reports
+  // `status:"paused"`); progress stays frozen at the last emitted values.
+  paused: false,
 };
 
 function emit(extra) {
@@ -47,6 +54,7 @@ function ensureConnected() {
       port = null;
       connecting = false;
       state.queue = [];
+      state.activeId = null;
       if (wasServing) {
         state.status = "idle";
         emit();
@@ -83,6 +91,41 @@ function resetTo(overrides) {
   Object.assign(state, overrides);
 }
 
+// Apply a host `queue` snapshot to `state.queue` + the active-download status.
+// Shared by the `queue` event handler, `getQueue`, and queue restore so the
+// status reflects a job this SW did not start (widget-started) without three
+// copies drifting.
+function adoptQueue(queue) {
+  state.queue = queue || [];
+  const head = state.queue[0];
+  if (head && (head.status === "downloading" || head.status === "paused")) {
+    state.paused = head.status === "paused";
+    const jobChanged = state.activeId !== head.id;
+    state.activeId = head.id;
+    // Clear items/pct whenever the active job changes, not just on a terminal
+    // status: a promoted next job shouldn't flash the previous job's pct. A
+    // pause↔resume flips only head.status; the job id is unchanged and status
+    // stays "downloading", so resetTo is never reached and the frozen progress
+    // survives the transition.
+    if (jobChanged || state.status !== "downloading") {
+      resetTo({ status: "downloading", items: [], message: null, warn: null });
+    }
+  } else {
+    state.activeId = null;
+    state.paused = false;
+    // No active download. The host only routes done/error/cancelled to the
+    // job's originator — a widget-started job's terminal transition never
+    // reaches us, so this branch is the only signal it ended. Own jobs have
+    // already been moved out of "downloading" by their routed terminal event,
+    // so this reset only fires for foreign jobs (and, if a terminal event is
+    // still in flight, is a harmless no-op on its way to the same result).
+    if (state.status === "downloading") {
+      resetTo({ status: "idle", items: [], message: null, warn: null });
+    }
+  }
+  schedulePersist();
+}
+
 function handleHostMessage(msg) {
   if (msg && msg.event && msg.event !== "progress") {
     if (msg.event === "done") {
@@ -99,6 +142,11 @@ function handleHostMessage(msg) {
   }
 
   if (msg && msg.event === "progress") {
+    // Req-less broadcasts carry `queueId`; the fine-grained per-job stream
+    // (with a req) is routed to us only if *we* started the job. Either way
+    // these fields describe the currently-active queue item, so they always
+    // belong to `state`. The handler above already moved us into
+    // "downloading" via the queue snapshot.
     state.pct = msg.pct;
     state.speed = msg.speed;
     state.eta = msg.eta;
@@ -107,18 +155,7 @@ function handleHostMessage(msg) {
   }
 
   if (msg && msg.event === "queue") {
-    state.queue = msg.queue || [];
-    schedulePersist();
-    // The host emits the queue with the next item already "downloading" before
-    // that worker's own `start` event arrives. If our status is still a
-    // terminal state from the previous job — or idle because this queue event
-    // beat the very first `start` — reset it so a reopen doesn't flash the
-    // old job's "Saved N files" / error on top of the new item.
-    const next = (msg.queue[0] || {}).status;
-    if (next === "downloading" &&
-        (state.status === "done" || state.status === "error" || state.status === "idle")) {
-      resetTo({ status: "downloading", items: [], message: null, warn: null });
-    }
+    adoptQueue(msg.queue);
   }
 
   const req = msg && msg.req;
@@ -227,8 +264,9 @@ async function restoreFromStorage() {
     if (!qr.ok) return; // can't confirm host state — don't risk duplicates
     if (qr.queue && qr.queue.length) {
       // The host already owns a running queue (extension reload while a
-      // download was in flight): adopt it, drop the stored copy.
-      state.queue = qr.queue;
+      // download was in flight, or a widget-started job): adopt it, drop the
+      // stored copy.
+      adoptQueue(qr.queue);
       persistQueueNow();
       return;
     }
@@ -300,7 +338,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       hostQueue()
         .then((res) => {
           if (res && res.ok && res.queue) {
-            state.queue = res.queue;
+            adoptQueue(res.queue);
             persistQueueNow();
             sendResponse({ ok: true, queue: state.queue });
           } else {
@@ -384,6 +422,21 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
             else sendResponse({ ok: false, error: (res && res.error) || "cancel rejected" });
           });
         })
+        .catch((err) => sendResponse({ ok: false, error: String(err) }));
+      return true;
+
+    case "pause":
+      if (typeof msg.paused !== "boolean") {
+        sendResponse({ ok: false, error: "invalid paused flag" });
+        return false;
+      }
+      withNativePort()
+        .then((p) =>
+          request(p, "pause", { paused: msg.paused }).then((res) => {
+            if (res && res.ok) sendResponse({ ok: true });
+            else sendResponse({ ok: false, error: (res && res.error) || "pause rejected" });
+          })
+        )
         .catch((err) => sendResponse({ ok: false, error: String(err) }));
       return true;
 

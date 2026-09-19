@@ -4,7 +4,9 @@ A Chromium / Brave-Origin extension that downloads videos, subtitles, and
 playlists through a local [yt-dlp](https://yt-dlp.github.io/) native host,
 without cookies or accounts. Companion to the Omarchy "Download Video"
 extension, but with a full popup UI that mirrors **exactly** what the video
-offers:
+offers — plus an Omarchy bar-widget (`najm.downloads`) that shares the same
+download queue, so jobs survive popup/browser restarts and are manageable from
+either surface:
 
 - **quality**: one option per resolution actually offered by the video, from
   highest to lowest (nothing more — no codec names). The best codec for each
@@ -51,16 +53,20 @@ offers:
 ```
 extension/          MV3 extension (manifest rendered by install.sh)
   manifest.json.in  template — @@KEY@@ is replaced with your RSA public key
-  background-3.js   owns a single native-messaging port, routes probe/download/cancel/reorder/getQueue + the queue (filename versioned! see Troubleshooting)
+  background-4.js   owns a single native-messaging port, routes probe/download/cancel/reorder/getQueue + the queue (filename versioned! see Troubleshooting)
   popup.{html,css,js}  toolbar popup
   options.{html,css,js} defaults (output dir, resolutions, subtitle defaults)
   theme.{js,css}       live Omarchy theme → CSS vars on :root
   controls.js          custom select/checkbox visuals (native elements stay the source of truth)
 host/
-  najm-ytdlp-host   Python native-messaging host (stdio, 4-byte LE framing)
+  najm-ytdlp-host   Python native-messaging host — two modes: the default shim
+                    relays the browser's 4-byte framed stdio to a JSON-lines
+                    unix-socket daemon (`--agent`) that owns the shared queue
   com.najm.ytdlp.json.tpl  host manifest template
   najm-ytdlp-key.pem  generated RSA key (stable extension id) — keep private
 tools/make-icons.py icon generator (regenerate: `uv run --directory tools python make-icons.py`)
+~/.config/omarchy/plugins/najm.downloads/  Omarchy bar-widget, a second client of the same
+     agent socket — the popup's probe/download/progress/queue UI, sharing the queue
 install.sh / uninstall.sh
 ```
 
@@ -128,6 +134,21 @@ The background service worker connects a native port
 (`chrome.runtime.connectNative("com.najm.ytdlp")`). Requests are length-prefixed
 JSON on stdio:
 
+Under the hood there are **two host processes, not one**: the process the
+browser's native-messaging port talks to is a thin **shim** that just forwards
+each 4-byte-framed request to a long-lived **agent** daemon over a local unix
+socket (`$XDG_RUNTIME_DIR/najm-ytdlp/agent.sock`, JSON-lines) and relays the
+agent's replies back. The agent owns the download queue, so it outlives every
+shim/browser session — which is what makes the queue shared and persistent. The
+Omarchy **`najm.downloads` bar-widget** is a second client of that same socket
+(no 4-byte framing — it speaks JSON-lines directly), so a download started in
+the popup shows up in the widget live, and vice-versa. The agent is
+lazy-spawned by a shim on demand and idle-exits (120s with nothing to do), so
+it never accumulates as a background process; job-specific streams
+(`start`/`progress`/`file`/`done`/`error`/`cancelled`/`info`) are routed only
+to the client that started the job, while `queue` snapshots and coarse
+`progress` go to every client.
+
 - `ping` → host/yt-dlp/ffmpeg availability
 - `probe` → title, thumbnail, duration, chapter count, **all real format
   streams** (id, size, fps, ext, codecs), manual + auto subtitle language maps;
@@ -193,7 +214,7 @@ whitelist-validated.
   `chrome://extensions` → reload "Najm Downloader", or fully quit the browser
   (a window close can leave background processes keeping the old SW alive).
   Chromium caches MV3 service workers for `--load-extension` extensions, so SW
-  changes also need the filename bumped (currently `background-3.js`, the
+  changes also need the filename bumped (currently `background-4.js`, the
   download-queue bump from `background-2.js`) before reload — same trick as
   the Omarchy `copy-url` extension.
 - Probe shows **`Could not establish connection. Receiving end does not exist.`**

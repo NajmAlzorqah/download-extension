@@ -5,7 +5,7 @@
   "description": "Download videos via a local yt-dlp host. Pick resolution/container, grab subtitles (incl. auto-generated), download playlists.",
   "minimum_chrome_version": "116",
   "permissions": ["nativeMessaging", "activeTab", "storage", "tabs"],
-  "background": { "service_worker": "background-3.js" },
+  "background": { "service_worker": "background-4.js" },
   "action": {
     "default_title": "Najm Downloader",
     "default_popup": "popup.html",

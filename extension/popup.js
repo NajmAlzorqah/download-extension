@@ -25,6 +25,9 @@ let playlistTouched = false;
 // Set once the user edits the URL field by hand, so the popup stops
 // overwriting it from the tab's own navigations.
 let urlTouched = false;
+// True while the active download is SIGSTOP'd on the host; drives the
+// Pause/Resume toggle label and the frozen "Paused" hint.
+let pausedNow = false;
 
 function send(msg) {
   return chrome.runtime.sendMessage(msg).catch((e) => ({ ok: false, error: String(e) }));
@@ -656,6 +659,9 @@ function onHostEvent(snapshot) {
     el("downloadBtn").hidden = false;
     el("downloadBtn").disabled = false;
     el("cancelBtn").hidden = false;
+    pausedNow = !!snapshot.paused;
+    el("pauseBtn").hidden = false;
+    el("pauseBtn").textContent = pausedNow ? "Resume" : "Pause";
     setProgress(snapshot.pct ?? 0);
     const d = snapshot.downloaded, t = snapshot.total;
     el("dlSize").textContent = t != null
@@ -665,13 +671,15 @@ function onHostEvent(snapshot) {
     if (snapshot.speed) speedParts.push(`speed ${snapshot.speed}`);
     if (snapshot.eta) speedParts.push(`${snapshot.eta} left`);
     el("speed").textContent = speedParts.join(" · ");
-    el("msg").textContent = snapshot.message || "";
+    el("msg").textContent = snapshot.message || (pausedNow ? "Paused" : "");
   } else if (snapshot.status === "done") {
     el("progress").hidden = true;
     el("dlSize").textContent = "";
     el("downloadBtn").hidden = false;
     el("downloadBtn").disabled = false;
     el("cancelBtn").hidden = true;
+    el("pauseBtn").hidden = true;
+    pausedNow = false;
     if (snapshot.message === "Cancelled") {
       setWarn(null);
       el("msg").textContent = (snapshot.items || []).length
@@ -690,8 +698,13 @@ function onHostEvent(snapshot) {
     el("downloadBtn").hidden = false;
     el("downloadBtn").disabled = false;
     el("cancelBtn").hidden = true;
+    el("pauseBtn").hidden = true;
+    pausedNow = false;
     setWarn(null);
     el("msg").textContent = "Error: " + (snapshot.message || "unknown");
+  } else {
+    el("pauseBtn").hidden = true;
+    pausedNow = false;
   }
   renderQueue(snapshot.queue || []);
 }
@@ -824,6 +837,8 @@ el("url").addEventListener("keydown", (e) => { if (e.key === "Enter") probe(); }
 el("probeBtn").addEventListener("click", probe);
 el("downloadBtn").addEventListener("click", startDownload);
 el("cancelBtn").addEventListener("click", () => send({ action: "cancel" }));
+el("pauseBtn").addEventListener("click", () =>
+  send({ action: "pause", paused: !pausedNow }));
 el("optsLink").addEventListener("click", (e) => {
   e.preventDefault();
   chrome.runtime.openOptionsPage();
