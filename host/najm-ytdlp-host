@@ -812,16 +812,22 @@ def build_command(url, sel, with_subs=True):
 
 
 def osd_available():
-    return not os.environ.get("NDLP_NO_OMARCHY") and omarchy_tool("omarchy-osd") is not None
+    return not os.environ.get("NDLP_NO_OMARCHY") and omarchy_tool("omarchy-shell") is not None
 
 
 def osd_progress(pct_int, title=None):
-    tool = omarchy_tool("omarchy-osd")
+    tool = omarchy_tool("omarchy-shell")
     if not tool or os.environ.get("NDLP_NO_OMARCHY"):
         return
-    args = [tool, "-i", OSD_ICON_DOWNLOAD, "-p", str(pct_int), "-d", "8000"]
-    if title:
-        args += ["-m", title]
+    payload = json.dumps({
+        "icon": OSD_ICON_DOWNLOAD,
+        "message": title or "",
+        "value": str(pct_int),
+        "progressText": "%d%%" % pct_int,
+        "max": "100",
+        "duration": "8000",
+    })
+    args = [tool, "-q", "najm.osd", "show", payload]
     try:
         subprocess.run(args, check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
@@ -833,7 +839,7 @@ def osd_close():
     if not tool or os.environ.get("NDLP_NO_OMARCHY"):
         return
     try:
-        subprocess.run([tool, "-q", "osd", "close"],
+        subprocess.run([tool, "-q", "najm.osd", "close"],
                        check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     except Exception:
         pass

@@ -96,19 +96,26 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
   reports their existence, not PATH lookup.
 - Headless / custom `--user-data-dir` runs expect `com.najm.ytdlp.json` inside
   the profile's `NativeMessagingHosts/`, not `~/.config/...`.
-- Set `NDLP_NO_OMARCHY=1` when driving the host by hand to suppress the OSD and
-  toasts (`omarchy-osd`, `omarchy-notification-send`).
-- The download OSD's stacked title-over-bar layout comes from a **user clone**,
-  `~/.config/omarchy/plugins/najm.osd/` (stock `omarchy.osd` in
+- Set `NDLP_NO_OMARCHY=1` when driving the host by hand to suppress the OSD
+  (`omarchy-shell -q najm.osd show/close`) and toasts
+  (`omarchy-notification-send`).
+- The download OSD's stacked title-over-bar layout comes from the **`najm.osd`
+  panel**, `~/.config/omarchy/plugins/najm.osd/` (stock `omarchy.osd` in
   `/usr/share/omarchy/shell/plugins/osd/` renders *either* a bar *or* a
-  message). It was created with `omarchy plugin clone omarchy.osd` and must not
-  be edited in place under `/usr/share/omarchy/` (package-owned, wiped on
-  update). Keep `OsdModel.js`'s `readout` field and `stacked`/bar logic in sync
-  with what `osd_progress()` sends; an `omarchy update` may prompt to restore
-  `omarchy.osd`, in which case re-clone and re-apply the two-file change. QML
-  edits here need `omarchy restart shell` — the plugin watcher only logs
-  `Local plugin changed, reloading`, it does **not** re-instantiate the running
-  OSD panel (so an edit can look ignored until a full shell restart).
+  message). The two coexist: stock `omarchy.osd` is enabled and serves the
+  whole system (volume/brightness/media/monitor OSDs keep their stock single-row
+  layout), while this project drives `najm.osd` **directly** — the clone is a
+  standalone panel whose manifest carries **no `omarchy.clonedFrom`** (so
+  `PluginRegistry.resolveEnabledId` never redirects system `omarchy.osd` summons
+  to it), registers `IpcHandler { target: "najm.osd" }`, and uses the
+  `najm-osd` layer-shell namespace. The host sends
+  `omarchy-shell -q najm.osd show <json>`/`close` instead of the `omarchy-osd`
+  binary. Keep `OsdModel.js`'s `readout` field and `stacked`/bar logic in sync
+  with what `osd_progress()` sends. Never edit the clone in place under
+  `/usr/share/omarchy/` (package-owned, wiped on update). QML edits here need
+  `omarchy restart shell` — the plugin watcher only logs `Local plugin changed,
+  reloading`, it does **not** re-instantiate the running OSD panel (so an edit
+  can look ignored until a full shell restart).
 
 ## Host security invariants (don't weaken when editing)
 
@@ -206,12 +213,14 @@ End-of-download toasts (`notify_done`/`notify_many`/`notify_error`) are
 unchanged and still fall back to `notify-send`; the progress OSD is
 Omarchy-only and absent when `NDLP_NO_OMARCHY`/no shell.
 
-The stacked title-over-bar rendering comes from Omarchy **`omarchy.osd`
-cloned as `najm.osd`** (installed via `omarchy plugin clone omarchy.osd`, see
-Gotchas) — stock Omarchy draws *either* a bar *or* a message, never both
-(`OsdModel.js` forced `hasProgress=false` whenever a message was passed). The
-host keeps calling `omarchy osd -i <glyph> -m <title> -p <pct> -d 8000`
-unchanged; the clone renders it vertically. `_osd_refresh()` re-shows the OSD
+The stacked title-over-bar rendering comes from the **`najm.osd` panel**
+(clone of `omarchy.osd`, see Gotchas) — stock Omarchy draws *either* a bar
+*or* a message, never both (`OsdModel.js` forced `hasProgress=false` whenever
+a message was passed). The host builds the OSD payload itself (`icon`,
+`message`, `value`, `progressText`, `max`, `duration`) and sends it straight to
+the clone via `omarchy-shell -q najm.osd show <json>`; stock `omarchy.osd` is
+untouched and keeps serving every system OSD (volume/brightness/media/monitor),
+so only downloads render the vertical clone. `_osd_refresh()` re-shows the OSD
 ~1/s (throttled), including during the subtitle lock probe's retry backoffs
 and per-attempt clock thread, so the 8s card doesn't expire mid-probe; every
 exit path calls `osd_close()`. Clicking the card hides it: the clone sets a
