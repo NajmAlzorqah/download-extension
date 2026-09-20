@@ -238,3 +238,33 @@ whitelist-validated.
 Uninstall strips the extension in place from the `--load-extension=` list, so
 flags other tools added after install are preserved; the `.najm-bak` backup is
 left on disk as a manual safety net.
+
+## Contributing
+
+Open to contributions under the MIT License. Fork, branch, and open a pull
+request; commit with a `Signed-off-by` trailer (Developer Certificate of
+Origin) so contributions are cleanly licensed inbound = outbound. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Credits
+
+- The **Omarchy** desktop shell and its `omarchy.osd` panel (MIT,
+  © David Heinemeier Hansson) — the `najm.osd` OSD clone is a derivative of the
+  stock panel; see [NOTICE.md](NOTICE.md).
+- **yt-dlp** (Unlicense) does the actual downloading; **ffmpeg** handles
+  merging; **Quickshell** (LGPL-3.0) is the QML runtime the panels run on.
+- Agent skills vendored under `.agents/skills/` from
+  [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) (MIT,
+  © 2025 Addy Osmani).
+- The Omarchy **Download Video** extension + native host, whose companion
+  pattern, OSD glyphs and toast style this project matches.
+
+## License
+
+This project is licensed under the **MIT License** — see [LICENSE](LICENSE).
+Third-party notices and license texts for every incorporated or referenced
+work are collected in [NOTICE.md](NOTICE.md).
+
+The license covers this project's code only. It downloads third-party media at
+the user's request — respect the legal terms and copyright of the platforms and
+content you download; those are not conveyed by this license.
