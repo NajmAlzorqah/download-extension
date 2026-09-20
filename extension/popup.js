@@ -185,7 +185,7 @@ function presetFormats() {
   add("preset-360", "360p", { res: "360" });
   add("preset-240", "240p", { res: "240" });
   add("preset-144", "144p", { res: "144" });
-  add("preset-audio", "Audio only", { audioOnly: true });
+  add("preset-audio", "Audio only · MP3", { audioOnly: true });
   return presets;
 }
 
@@ -243,7 +243,12 @@ function renderFormats() {
   const collapsed = [];
   for (const grp of byHeight.values()) collapsed.push(pickVideo(grp));
   collapsed.sort(fmtOrder); // non-audio first, big → small
-  if (audioOnly.length) collapsed.push(pickAudio(audioOnly)); // single best audio-only option
+  if (audioOnly.length) {
+    // A preset rather than a specific audio format id: the host then uses the
+    // best available audio track (`ba/b`) and transcodes it to MP3.
+    collapsed.push({ id: "preset-audio", label: "Audio only · MP3",
+                     preset: true, audioOnly: true, res: "best" });
+  }
 
   probeData.formats = collapsed;
 
@@ -253,7 +258,7 @@ function renderFormats() {
     o.value = String(f.id);
     o.title = `id ${f.id}`;
     if (!f.vcodec || f.vcodec === "none") {
-      o.textContent = "Audio only" + fmtSizeStr(f.size);
+      o.textContent = f.preset ? f.label : "Audio only" + fmtSizeStr(f.size);
     } else {
       let label = f.height ? f.height + "p" : "Video";
       if (f.fps && f.fps > 30) label += " · " + Math.round(f.fps) + "fps";
@@ -520,6 +525,7 @@ function buildSelection() {
     title: (meta && (meta.sample || meta.title)) || "",
     label: formatLabel(),
     audioOnly: fmt.audioOnly,
+    audioFmt: "mp3",
     formatId: fmt.formatId,
     formatHasAudio: !!fmt.formatHasAudio,
     formatExt: fmt.formatExt,

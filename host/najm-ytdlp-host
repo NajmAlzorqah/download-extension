@@ -783,7 +783,7 @@ def is_playlist_url(url):
     return "list=" in u or "/playlist" in u
 
 
-def build_command(url, sel, with_subs=True):
+def build_command(url, sel, with_subs=True, temp_dir=None):
     out_dir = sel.get("outputDir")
     if not isinstance(out_dir, str) or not out_dir.replace("/", "").strip():
         out_dir = DEFAULT_DIR
@@ -795,7 +795,7 @@ def build_command(url, sel, with_subs=True):
     audio_only = sel.get("audioOnly") is True
     audio_fmt = sel.get("audioFmt")
     if audio_fmt not in ("best", "m4a", "mp3", "opus"):
-        audio_fmt = "best"
+        audio_fmt = "mp3"
 
     format_id = sel.get("formatId")
     if not isinstance(format_id, str) or not RE_FMTID.fullmatch(format_id):
@@ -817,6 +817,8 @@ def build_command(url, sel, with_subs=True):
             fsel = "ba/b"
         cmd += ["-f", fsel]
         cmd += ["-x", "--audio-format", audio_fmt]
+        if audio_fmt != "best":
+            cmd += ["--audio-quality", "0"]
         out_tpl = (
             "%(playlist_title)s/%(playlist_index)03d_%(title)s.%(ext)s"
             if is_pl else "%(title)s.%(ext)s"
@@ -876,7 +878,10 @@ def build_command(url, sel, with_subs=True):
                  "%(title)s - %(section_number)02d_%(section_title)s.%(ext)s"))
             cmd += ["-o", "chapter:" + chapter_tpl]
 
-    cmd += ["--paths", out_dir, "-o", out_tpl]
+    cmd += ["--paths", out_dir]
+    if temp_dir:
+        cmd += ["--paths", "temp:" + temp_dir]
+    cmd += ["-o", out_tpl]
 
     if with_subs:
         subs = sel.get("subs") or {}
@@ -1056,7 +1061,14 @@ def download_worker(job):
     guard already covers the dying-stdout case, this is the belt-and-suspenders
     net). `finish_job(job)` is idempotent per job, so a worker that already
     called it on its happy/cancel/error paths won't double-promote.
+
+    Every job gets a per-job scratch dir (`job["_tmpdir"]`) that yt-dlp's
+    `--paths temp:` rents for its intermediary files (.part/.ytdl/per-stream
+    copies) — they never land in the user's output dir. The dir is removed
+    here on every terminal path (done/error/cancel/unexpected exception) so a
+    cancelled download never leaves partial files behind.
     """
+    job["_tmpdir"] = tempfile.mkdtemp(prefix="najm-dl-")
     try:
         _download_worker(job)
     except Exception:
@@ -1069,6 +1081,7 @@ def download_worker(job):
     finally:
         finish_job(job)
         forget_req(job.get("req"))
+        shutil.rmtree(job["_tmpdir"], ignore_errors=True)
         inflight_dec()
 
 
@@ -1155,7 +1168,7 @@ def _download_worker(job):
             while not stopping.wait(1.0):
                 _osd_refresh(None)
         try:
-            cmd, _ = build_command(url, lock_sel, with_subs=True)
+            cmd, _ = build_command(url, lock_sel, with_subs=True, temp_dir=tmp_dir)
             if "--" in cmd:
                 cmd.insert(cmd.index("--"), "--skip-download")
             if is_pl and "--" in cmd:
@@ -1213,7 +1226,8 @@ def _download_worker(job):
 
     def run_one(with_subs):
         global current_proc
-        cmd, out_dir = build_command(url, sel, with_subs=with_subs)
+        cmd, out_dir = build_command(url, sel, with_subs=with_subs,
+                                     temp_dir=job["_tmpdir"])
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True, bufsize=1)
         with STATE_LOCK:
