@@ -33,6 +33,7 @@ Omarchy theme via the host's read-only `theme` action).
 | `extension/options.{html,js,css}` | defaults via `chrome.storage.local` |
 | `host/najm-ytdlp-host` | single-file stdlib-only Python host with two modes: the default **shim** serves the browser's 4-byte LE length-prefixed JSON on stdio by relaying it to the JSON-lines **agent** daemon over a unix socket; `--agent` runs the long-lived daemon that owns the shared queue (see "Shared queue daemon") |
 | `host/com.najm.ytdlp.json.tpl` | NativeMessagingHosts manifest template (`@@HOST_PATH@@`, `@@EXT_ORIGIN@@`) |
+| `host/browsers.sh` | single source of browser coverage for `install.sh`/`uninstall.sh`: canonical roots + conservative discovery (only registers a non-canonical Chromium-family root whose flags conf already exists — never invents paths) |
 | `install.sh` / `uninstall.sh` | register/deregister the browser side in the ten Chromium-family profiles; install.sh writes the marker the widget reads |
 | `tools/make-icons.py` | regenerates `extension/icons/*.png` |
 | `tools/perf-check.sh` | samples agent/shim/quickshell RSS + CPU over a window, or counts `najm.osd` "show" spawns — the measurement tool behind the OSD/theme perf fixes (see Commands) |
@@ -168,6 +169,19 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
   the extension" hint; code cannot fix it — only a reload/heal can.
 - Host **hardcodes** `/usr/bin/yt-dlp` and `/usr/bin/ffmpeg` (lines 32-33); ping
   reports their existence, not PATH lookup.
+- **OSD/deps coupling is health-reported, not silent.** The host `ping` reply now
+  carries additive `osd` (`unknown|ok|missing|broken`), `osdIssue`, and `deps`
+  (`ytdlp`/`ffmpeg`/`omarchyShell`/`hyprctl`/`fcMatch`) fields — additive so the
+  browser classifiers (`Client.js` `isPingReply`, `background-6.js` ping state)
+  keep working. The widget's popup shows a warn row under the status line when
+  the progress OSD is unreachable or an Omarchy dep checks out missing (an
+  Omarchy update that breaks `omarchy-shell -q najm.osd show|close` shows up
+  there, not as a silent absence). OSD health is probed TTL-gated (60s) and only
+  when a download is about to show a card, so nothing flickers at rest.
+  The OSD payload carries `ipc: "nd-osd-1"` + `iface_version` which the panel
+  (`OsdModel.js`) validates with a `console.warn` on mismatch. **`docs/
+  omarchy-compat.md` is the compatibility pin** for the full Omarchy contract —
+  read it after any Omarchy update.
 - Headless / custom `--user-data-dir` runs expect `com.najm.ytdlp.json` inside
   the profile's `NativeMessagingHosts/`, not `~/.config/...`.
 - Set `NDLP_NO_OMARCHY=1` when driving the host by hand to suppress the OSD

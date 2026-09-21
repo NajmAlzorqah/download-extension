@@ -46,6 +46,9 @@ Panel {
   property bool hostOnline: false
   property bool hostYtdlp: false
   property bool hostFfmpeg: false
+  property string hostOsd: "unknown" // unknown | ok | missing | broken
+  property string hostOsdIssue: ""
+  property bool hostOmarchyShell: true
   property string hostState: "connecting" // connecting | online | offline
   property var queue: []
   property string hostBinary: ""
@@ -54,6 +57,19 @@ Panel {
     hostOnline
       ? "yt-dlp: " + (hostYtdlp ? "present" : "MISSING") + " · ffmpeg: " + (hostFfmpeg ? "present" : "MISSING")
       : hostState === "connecting" ? "connecting…" : "offline"
+
+  // Update-drift warnings: an Omarchy update can leave the progress OSD / shell
+  // deps silently absent. Surface one concise line when a dep actually checks
+  // out missing (empty when healthy) so the failure is visible, not silent.
+  readonly property string osdWarn: {
+    if (!hostOnline) return ""
+    if (hostOsd === "missing" || hostOsd === "broken") {
+      var why = hostOsdIssue === "" ? "" : (" — " + hostOsdIssue)
+      return "Progress OSD unavailable" + why + " (downloads fall back to notifications)"
+    }
+    if (!hostOmarchyShell) return "omarchy-shell missing — OSD/notifications disabled"
+    return ""
+  }
 
   // --- first-run browser setup (the widget doubles as installer) ------
   //
@@ -399,6 +415,11 @@ Panel {
       root.hostOnline = true
       root.hostYtdlp = obj.ytdlp === true
       root.hostFfmpeg = obj.ffmpeg === true
+      root.hostOsd = String(obj.osd || "unknown")
+      root.hostOsdIssue = String(obj.osdIssue || "")
+      if (obj.deps && typeof obj.deps === "object") {
+        root.hostOmarchyShell = String(obj.deps.omarchyShell) !== "false"
+      }
       root.hostState = "online"
       pingTimeoutTimer.restart()
       return
@@ -678,6 +699,18 @@ Panel {
         textFormat: Text.PlainText
         text: root.statusText
         color: root.hostOnline ? Qt.darker(Color.popups.text, 1.5) : Color.urgent
+      }
+      // Update-drift warning: an Omarchy update that breaks the progress OSD or
+      // the shell deps shows up here instead of failing silently.
+      Text {
+        width: parent.width
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+        textFormat: Text.PlainText
+        wrapMode: Text.WordWrap
+        text: root.osdWarn
+        color: Qt.darker(Color.popups.text, 1.5)
+        visible: root.osdWarn !== ""
       }
 
       // --- browser-setup pane (first run) -----------------------------

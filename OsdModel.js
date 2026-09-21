@@ -7,6 +7,12 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value))
 }
 
+// OSD IPC contract version, mirrored from host/najm-ytdlp-host (OSD_IPC_*).
+// `open()` in Osd.qml warns on mismatch so a payload-shape change is visible at
+// dev time instead of silently misrendering. Keep in sync with the host.
+var OSD_IPC_TAG = "nd-osd-1"
+var OSD_IPC_VERSION = 1
+
 // The widest glyph `iconFor` can return. The progress OSD sizes its icon
 // column to it so the bar keeps its place as the icon changes.
 var widestIcon = ""
@@ -69,6 +75,8 @@ if (typeof module !== "undefined") {
   module.exports = {
     widestIcon: widestIcon,
     iconFor: iconFor,
-    stateForShow: stateForShow
+    stateForShow: stateForShow,
+    OSD_IPC_TAG: OSD_IPC_TAG,
+    OSD_IPC_VERSION: OSD_IPC_VERSION
   }
 }

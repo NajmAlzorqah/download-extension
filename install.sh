@@ -24,36 +24,28 @@ MANIFEST_NAME="com.najm.ytdlp.json"
 STATE_DIR="$HOME/.local/state/najm-downloads"
 MARKER="$STATE_DIR/installed.json"
 
-# Chromium-family profile roots that use the NativeMessagingHosts layout.
-# Omarchy-parity (omarchy-install-chromium-ytdlp) plus this project's own
-# Brave-Origin profile.
-NATIVE_DIRS=(
-  "$HOME/.config/chromium"
-  "$HOME/.config/google-chrome"
-  "$HOME/.config/google-chrome-beta"
-  "$HOME/.config/google-chrome-unstable"
-  "$HOME/.config/BraveSoftware/Brave-Browser"
-  "$HOME/.config/BraveSoftware/Brave-Browser-Beta"
-  "$HOME/.config/BraveSoftware/Brave-Browser-Nightly"
-  "$HOME/.config/BraveSoftware/Brave-Origin"
-  "$HOME/.config/microsoft-edge"
-  "$HOME/.config/microsoft-edge-dev"
-)
-# Flags conf names (matches the Omarchy yt-dlp migration list + Brave-Origin).
-FLAGS_CONFS=(
-  chromium
-  chrome
-  google-chrome
-  brave
-  brave-beta
-  brave-nightly
-  brave-origin
-  brave-origin-beta
-  microsoft-edge-stable
-)
-# Core browsers: create their flags conf even if it doesn't exist yet so the
-# extension is guaranteed for the profiles this project targets.
-CORE_CONFS=(chromium brave-origin)
+# Canonical browser coverage + conservative discovery (single source in
+# host/browsers.sh, shared with uninstall.sh so the lists can't drift).
+# All canonical Chromium-family roots that use the NativeMessagingHosts layout
+# are written unconditionally (Omarchy-parity + this project's Brave-Origin);
+# a discovered root is only registered when its flags conf already exists on
+# disk — install never invents config paths.
+source "$ROOT/host/browsers.sh"
+mapfile -t NATIVE_DIRS < <(browser_roots)
+mapfile -t FLAGS_CONFS < <(browser_conf_names)
+mapfile -t CORE_CONFS < <(browser_core_confs)
+DISCOVERED_ROOTS=()
+DISCOVERED_CONFS=()
+while IFS=$'\t' read -r _d _c || [[ -n "$_d" ]]; do
+  [[ -n "$_d" ]] || continue
+  DISCOVERED_ROOTS+=("$_d")
+  DISCOVERED_CONFS+=("$_c")
+done < <(browser_discover)
+for _i in "${!DISCOVERED_ROOTS[@]}"; do
+  NATIVE_DIRS+=("${DISCOVERED_ROOTS[$_i]}")
+  FLAGS_CONFS+=("${DISCOVERED_CONFS[$_i]}")
+done
+unset _d _c _i
 
 need() { command -v "$1" >/dev/null 2>&1 || { echo "error: missing $1" >&2; exit 1; }; }
 need sha256sum
@@ -103,13 +95,14 @@ done
 # Downloader checkout path so a line never carries two. The work happens in
 # python (already required for the marker) to avoid sed fragility with
 # comma-separated values and other flags on the same line.
-python3 - "$EXT_DIR" "${FLAGS_CONFS[@]}" <<'PY'
+CORE_ARG="$(IFS=,; echo "${CORE_CONFS[*]}")"
+python3 - "$EXT_DIR" "$CORE_ARG" "${FLAGS_CONFS[@]}" <<'PY'
 import json, os, re, sys
 
 ext = sys.argv[1]
-confs = sys.argv[2:]
+core = set(x for x in sys.argv[2].split(",") if x)
+confs = sys.argv[3:]
 home = os.environ.get("HOME", "")
-core = {"chromium", "brave-origin"}
 
 def is_other_najm(p):
     if p == ext:
@@ -247,6 +240,7 @@ echo "Najm Downloader installed."
 echo "  extension dir : $EXT_DIR"
 echo "  extension id  : $ID"
 echo "  profiles      : $(IFS=', '; echo "${written[*]}")"
+echo "  discovered    : ${#DISCOVERED_ROOTS[@]} extra root(s) with an existing flags conf"
 echo "  yt-dlp        : $([ "$YOUTUBE_OK" = 1 ] && echo present || echo MISSING)"
 echo "  ffmpeg        : $([ "$FFMPEG_OK" = 1 ] && echo present || echo MISSING)"
 echo

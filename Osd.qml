@@ -111,6 +111,16 @@ Item {
   function open(payloadJson) {
     try {
       var p = JSON.parse(payloadJson || "{}")
+      var ipc = String(p.ipc || "")
+      var iv = parseInt(p.iface_version, 10)
+      if (ipc !== OsdModel.OSD_IPC_TAG || iv !== OsdModel.OSD_IPC_VERSION) {
+        // Payload-shape drift between the host and this panel — log it so an
+        // Omarchy/host update that changes the IPC is visible instead of
+        // silently misrendering. Rendering still proceeds (best effort).
+        console.warn("najm.osd: ipc mismatch — payload ipc=" + ipc +
+                     " iface_version=" + (isNaN(iv) ? "none" : iv) +
+                     ", panel wants " + OsdModel.OSD_IPC_TAG + " v" + OsdModel.OSD_IPC_VERSION)
+      }
       show(p.icon || "", p.message || "", p.value === undefined ? "" : String(p.value), p.max === undefined ? "100" : String(p.max), p.progressText || "", p.duration === undefined ? "1200" : String(p.duration))
     } catch (e) {}
   }

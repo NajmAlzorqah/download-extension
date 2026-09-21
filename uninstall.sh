@@ -12,29 +12,18 @@ MANIFEST_NAME="com.najm.ytdlp.json"
 STATE_DIR="$HOME/.local/state/najm-downloads"
 MARKER="$STATE_DIR/installed.json"
 
-NATIVE_DIRS=(
-  "$HOME/.config/chromium"
-  "$HOME/.config/google-chrome"
-  "$HOME/.config/google-chrome-beta"
-  "$HOME/.config/google-chrome-unstable"
-  "$HOME/.config/BraveSoftware/Brave-Browser"
-  "$HOME/.config/BraveSoftware/Brave-Browser-Beta"
-  "$HOME/.config/BraveSoftware/Brave-Browser-Nightly"
-  "$HOME/.config/BraveSoftware/Brave-Origin"
-  "$HOME/.config/microsoft-edge"
-  "$HOME/.config/microsoft-edge-dev"
-)
-FLAGS_CONFS=(
-  chromium
-  chrome
-  google-chrome
-  brave
-  brave-beta
-  brave-nightly
-  brave-origin
-  brave-origin-beta
-  microsoft-edge-stable
-)
+# Same browser coverage as install.sh (host/browsers.sh): canonical roots plus
+# conservative discovery of roots whose flags conf already exists — keeps the
+# uninstall symmetric with whatever install may have touched.
+source "$ROOT/host/browsers.sh"
+mapfile -t NATIVE_DIRS < <(browser_roots)
+mapfile -t FLAGS_CONFS < <(browser_conf_names)
+while IFS=$'\t' read -r _d _c || [[ -n "$_d" ]]; do
+  [[ -n "$_d" ]] || continue
+  NATIVE_DIRS+=("$_d")
+  FLAGS_CONFS+=("$_c")
+done < <(browser_discover)
+unset _d _c
 
 remove_native() {
   local file="$1/NativeMessagingHosts/$MANIFEST_NAME"

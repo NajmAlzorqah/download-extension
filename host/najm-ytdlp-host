@@ -112,6 +112,27 @@ OSD_ICON_DOWNLOAD = "󰇚"
 OSD_ICON_DONE = "󰄬"
 OSD_ICON_FAIL = "󰅖"
 
+# OSD IPC contract version. The `ipc` tag travels in every show payload and is
+# validated by the panel's OsdModel.js (`open()`), so a payload-shape change is
+# visible at dev time instead of silently misrendering. Bump whenever the
+# payload fields or the `najm.osd` command shape change; the panel copy must
+# track this value (see docs/omarchy-compat.md).
+OSD_IPC_VERSION = 1
+OSD_IPC_TAG = "nd-osd-%d" % OSD_IPC_VERSION
+
+# OSD health is best-effort detection of stale Omarchy coupling (an updated
+# omarchy-shell / moved plugin target that makes `show` no-op or fail). It is
+# probed lazily (TTL-gated, only when a download is about to show a real OSD,
+# plus opportunistically from show/close failures) so nothing flickers.
+_osd_health = {"state": "unknown", "issue": "", "t": 0.0}
+OSD_PROBE_TTL_S = 60.0
+OSD_PROBE_MSG = "Najm Downloader"
+OSD_PROBE_PAYLOAD = json.dumps({
+    "icon": OSD_ICON_DOWNLOAD, "message": OSD_PROBE_MSG, "value": "0",
+    "progressText": "0%", "max": "100", "duration": "0",
+    "ipc": OSD_IPC_TAG, "iface_version": OSD_IPC_VERSION,
+})
+
 # Socket-routing state (agent mode only). Each connected client is a Client;
 # BROADCAST goes to all of them. REQ_OWNERS maps an internal
 # "nd<uid>:<req>" key to its owning (Client, original_req) so per-job streams
@@ -944,6 +965,70 @@ def osd_available():
     return not os.environ.get("NDLP_NO_OMARCHY") and omarchy_tool("omarchy-shell") is not None
 
 
+def _osd_report(state, issue=""):
+    _osd_health["state"] = state
+    _osd_health["issue"] = issue
+    _osd_health["t"] = time.monotonic()
+
+
+def _osd_err_text(stderr):
+    # Sanitize captured stderr into a short one-line reason (ANSI/control
+    # stripped, capped) — never echoed verbatim to any surface.
+    try:
+        s = stderr.decode("utf-8", "replace")
+    except Exception:
+        return ""
+    s = RE_ANSI.sub("", s)
+    s = RE_CTRL.sub("", s)
+    return s.strip()[:120]
+
+
+def _osd_show(ipc_payload):
+    tool = omarchy_tool("omarchy-shell")
+    if not tool or os.environ.get("NDLP_NO_OMARCHY"):
+        return "missing", "omarchy-shell unavailable (NDLP_NO_OMARCHY or not found)"
+    try:
+        r = subprocess.run([tool, "-q", "najm.osd", "show", ipc_payload],
+                           check=False, timeout=3, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE)
+    except Exception as e:
+        return "broken", "osd show failed: %s" % (str(e)[:80] or type(e).__name__)
+    if r.returncode == 0:
+        return "ok", ""
+    issue = _osd_err_text(r.stderr) or "osd show exited %d" % r.returncode
+    return "broken", issue
+
+
+def osd_health():
+    """Best-effort OSD IPC health for the `ping` reply.
+
+    State is "unknown" until something probes; probing is cheap-signal based
+    (see probe_osd) so a working system never flashes an extra card.
+    """
+    state, issue = _osd_health["state"], _osd_health["issue"]
+    if os.environ.get("NDLP_NO_OMARCHY"):
+        return "missing", "disabled (NDLP_NO_OMARCHY)"
+    return state, issue
+
+
+def probe_osd():
+    """Re-check OSD IPC health, TTL-gated. Only called right before a real OSD
+    card is about to appear (download start) or from show/close failures, so the
+    probe's own show+close (duration 0) adds no visible flash at rest."""
+    now = time.monotonic()
+    state, issue = _osd_health["state"], _osd_health["issue"]
+    if state != "unknown" and now - _osd_health["t"] < OSD_PROBE_TTL_S:
+        return state, issue
+    if not osd_available():
+        _osd_report("missing", "omarchy-shell unavailable (NDLP_NO_OMARCHY or not found)")
+        return "missing", _osd_health["issue"]
+    state, issue = _osd_show(OSD_PROBE_PAYLOAD)
+    _osd_report(state, issue)
+    if state == "ok":
+        osd_close()
+    return state, issue
+
+
 def osd_progress(pct_int, title=None):
     tool = omarchy_tool("omarchy-shell")
     if not tool or os.environ.get("NDLP_NO_OMARCHY"):
@@ -955,12 +1040,20 @@ def osd_progress(pct_int, title=None):
         "progressText": "%d%%" % pct_int,
         "max": "100",
         "duration": "8000",
+        "ipc": OSD_IPC_TAG,
+        "iface_version": OSD_IPC_VERSION,
     })
     args = [tool, "-q", "najm.osd", "show", payload]
     try:
-        subprocess.run(args, check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+        r = subprocess.run(args, check=False, timeout=3, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE)
+    except Exception as e:
+        _osd_report("broken", "osd show failed: %s" % (str(e)[:80] or type(e).__name__))
+        return
+    if r.returncode == 0:
+        _osd_report("ok")
+    else:
+        _osd_report("broken", _osd_err_text(r.stderr) or "osd show exited %d" % r.returncode)
 
 
 def osd_close():
@@ -968,10 +1061,16 @@ def osd_close():
     if not tool or os.environ.get("NDLP_NO_OMARCHY"):
         return
     try:
-        subprocess.run([tool, "-q", "najm.osd", "close"],
-                       check=False, timeout=3, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+        r = subprocess.run([tool, "-q", "najm.osd", "close"],
+                           check=False, timeout=3, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.PIPE)
+    except Exception as e:
+        _osd_report("broken", "osd close failed: %s" % (str(e)[:80] or type(e).__name__))
+        return
+    if r.returncode == 0:
+        _osd_report("ok")
+    else:
+        _osd_report("broken", _osd_err_text(r.stderr) or "osd close exited %d" % r.returncode)
 
 
 def notify_done(title, filepath):
@@ -1146,6 +1245,10 @@ def _download_worker(job):
         osd_progress(osd_pct[0], title)
 
     if osd_available():
+        # Probe IPC health before the card appears; osd_progress below also
+        # feeds health back opportunistically (a success marks it ok, a failure
+        # records why) without any extra show/close at rest.
+        probe_osd()
         osd_progress(0, title)
         # The card was just shown at 0%; arm the refresh gate so the first
         # progress tick is accepted right away instead of waiting out a full
@@ -1661,8 +1764,17 @@ def handle_request(frame):
         return
 
     if action == "ping":
+        osd, osd_issue = osd_health()
         send({"req": req, "ok": True, "host": HOST_NAME,
-              "ytdlp": os.path.exists(YTDLP), "ffmpeg": os.path.exists(FFMPEG)})
+              "ytdlp": os.path.exists(YTDLP), "ffmpeg": os.path.exists(FFMPEG),
+              "osd": osd, "osdIssue": osd_issue,
+              "deps": {
+                  "ytdlp": os.path.exists(YTDLP),
+                  "ffmpeg": os.path.exists(FFMPEG),
+                  "omarchyShell": omarchy_tool("omarchy-shell") is not None,
+                  "hyprctl": shutil.which("hyprctl") is not None,
+                  "fcMatch": shutil.which("fc-match") is not None,
+              }})
         forget_req(req)
         return
 
