@@ -11,6 +11,14 @@
 
   const FALLBACK_NAME = "solitude";
 
+  // Header connection-state labels (shown in place of the theme name; the
+  // active theme name still lives in the element's tooltip).
+  const CONN_LABELS = {
+    ok: "connected",
+    offline: "offline",
+    reload: "reload needed",
+  };
+
   const HEX_RE = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/;
 
   // A stale/stopped MV3 service worker rejects the getTheme round-trip with
@@ -20,7 +28,7 @@
   // of keeping a second, driftable copy of their own.
   const SW_GONE_RE = /Could not establish connection|Receiving end does not exist/;
   const SW_GONE_DIAG =
-    "The extension's background worker isn't responding — open chrome://extensions, reload Najm Downloader, then try again.";
+    "The extension's background worker isn't responding. Open chrome://extensions, reload Najm Downloader, then try again.";
 
   // Fallback tokens come from theme.css `:root` (the single palette source).
   // If a token resolves empty here, apply() leaves the CSS variable unset so
@@ -195,14 +203,33 @@
     for (const [k, v] of Object.entries(vars)) {
       if (v) el.style.setProperty(k, v);
     }
+    setHostConn("ok", theme && theme.name ? theme.name.trim() : FALLBACK_NAME);
+  }
+
+  // Header connection-state label. The getTheme round-trip doubles as a host
+  // liveness probe, so the header now shows that health instead of just the
+  // theme name ("connected"/"offline"/"reload needed"), with the active theme
+  // kept in the tooltip. Exported so popup.js can refresh/overrule it from the
+  // authoritative `ping` response (which is never served from the ~4s cache).
+  function setHostConn(kind, title) {
     const capt = document.getElementById("themeName");
-    if (capt) capt.textContent = (theme && theme.name ? theme.name : FALLBACK_NAME).trim();
+    if (capt) {
+      capt.textContent = CONN_LABELS[kind] || CONN_LABELS.offline;
+      if (title !== undefined) capt.title = title;
+      capt.classList.remove("conn-ok", "conn-off", "conn-reload");
+      capt.classList.add(
+        kind === "ok" ? "conn-ok" : kind === "reload" ? "conn-reload" : "conn-off"
+      );
+    }
+    const dot = document.getElementById("hostDot");
+    if (dot) dot.className = "dot " + (kind === "ok" ? "on" : "off");
   }
 
   async function applyLive() {
     const el = document.documentElement;
     let theme = null;
     let diag = null;
+    let swGone = false;
     try {
       const res = await chrome.runtime.sendMessage({ action: "getTheme" });
       if (res && res.ok && res.theme) {
@@ -213,18 +240,21 @@
     } catch (err) {
       diag = String((err && err.message) || err);
     }
-    if (SW_GONE_RE.test(diag)) diag = SW_GONE_DIAG;
+    if (SW_GONE_RE.test(diag)) {
+      swGone = true;
+      diag = SW_GONE_DIAG;
+    }
     el.dataset.themeError = diag || "";
     if (theme) {
       apply(theme);
     } else {
-      const capt = document.getElementById("themeName");
-      if (capt) capt.textContent = (FALLBACK_NAME + " · offline").trim();
+      setHostConn(swGone ? "reload" : "offline", diag || "no response from background");
       if (diag) console.warn("[theme] getTheme failed:", diag);
     }
   }
 
   window.applyOmarchyTheme = applyLive;
+  window.setHostConn = setHostConn;
   window.SW_GONE_RE = SW_GONE_RE;
   window.SW_GONE_DIAG = SW_GONE_DIAG;
 

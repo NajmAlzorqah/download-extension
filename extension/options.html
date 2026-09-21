@@ -2,61 +2,71 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Najm Downloader — Options</title>
+  <title>Najm Downloader - Options</title>
   <link rel="stylesheet" href="theme.css">
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <div class="card">
-    <header>
-      <span class="brand"><span class="glyph">&#xF0DEA;</span>Najm Downloader</span>
-      <span class="sub">Options</span>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-glyph" aria-hidden="true">&#xF0DEA;</span>
+        <span class="brand-word">
+          <span class="brand-name">Najm Downloader</span>
+          <span class="brand-sub">options</span>
+        </span>
+      </div>
+      <span id="themeName" class="theme-name" role="status"></span>
     </header>
 
-    <section>
+    <section class="panel">
       <h2 class="section-title">Defaults</h2>
 
-      <label class="field-label" for="outDir">Save downloads to</label>
-      <input type="text" id="outDir" placeholder="~/Videos">
+      <div class="field-block">
+        <label class="field-label" for="outDir">Save downloads to</label>
+        <input type="text" id="outDir" placeholder="~/Videos">
+      </div>
 
-      <label class="check">
-        <input type="checkbox" id="playlist"> Download playlists by default
-      </label>
+      <div class="field-block">
+        <label class="check"><input type="checkbox" id="playlist"> Download playlists by default</label>
+      </div>
 
-      <label class="field-label" for="chapters">Video sections (chapters) by default</label>
-      <select id="chapters">
-        <option value="off">Don't store sections</option>
-        <option value="embed">Embed as chapter markers</option>
-        <option value="split">Split into separate files</option>
-      </select>
+      <div class="field-block">
+        <label class="field-label" for="chapters">Video sections (chapters)</label>
+        <select id="chapters">
+          <option value="off">Don't store sections</option>
+          <option value="embed">Embed as chapter markers</option>
+          <option value="split">Split into separate files</option>
+        </select>
+      </div>
     </section>
 
-    <section>
+    <section class="panel">
       <h2 class="section-title">Subtitles</h2>
-      <label class="check">
-        <input type="checkbox" id="subsOn"> Download subtitles by default
-      </label>
-      <label class="check">
-        <input type="checkbox" id="auto"> Include auto-generated captions
-      </label>
 
-      <label class="field-label" for="langs">Default languages (comma-separated, e.g. en,ar)</label>
-      <input type="text" id="langs" placeholder="en">
+      <div class="field-block">
+        <label class="check"><input type="checkbox" id="subsOn"> Download subtitles by default</label>
+        <label class="check sub"><input type="checkbox" id="auto"> Include auto-generated captions</label>
+      </div>
 
-      <label class="check">
-        <input type="checkbox" id="convertSrt"> Convert subtitles to SRT
-      </label>
-      <label class="check">
-        <input type="checkbox" id="embed"> Embed subtitles into the video file
-      </label>
+      <div class="field-block">
+        <label class="field-label" for="langs">Default languages (comma-separated, e.g. en,ar)</label>
+        <input type="text" id="langs" placeholder="en">
+      </div>
+
+      <div class="field-block">
+        <label class="check"><input type="checkbox" id="convertSrt"> Convert subtitles to SRT</label>
+        <label class="check"><input type="checkbox" id="embed"> Embed subtitles into the video file</label>
+      </div>
     </section>
 
-    <footer>
+    <footer class="options-footer">
       <div class="status" id="hostStatus"></div>
       <div class="actions">
-        <button id="save" class="btn primary">Save</button>
-        <button id="reset" class="btn">Reset to defaults</button>
         <span id="saved"></span>
+        <button id="reset" class="btn">Reset to defaults</button>
+        <button id="save" class="btn primary">Save</button>
       </div>
     </footer>
   </div>

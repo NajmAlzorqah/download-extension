@@ -1,12 +1,13 @@
 body {
   margin: 0;
-  padding: var(--sp-12);
+  padding: var(--sp-24);
+  min-height: 100dvh;
   background: var(--canvas);
   color: var(--fg);
 }
 
 .card {
-  width: 620px;
+  width: 560px;
   max-width: 100%;
   margin: 0 auto;
   background:
@@ -15,34 +16,34 @@ body {
   border: var(--card-border-w) solid transparent;
   border-radius: calc(var(--radius) + var(--card-border-w));
   overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3), 0 2px 10px rgba(0, 0, 0, 0.2);
 }
 
-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--sp-12) var(--sp-14);
-  background: var(--bar-bg);
-  border-bottom: 1px solid var(--ctrl-normal-border);
-}
-.brand { display: flex; align-items: center; gap: var(--sp-6); font-size: var(--font-heading); font-weight: 700; }
-.brand .glyph { color: var(--accent); }
-header .sub { color: var(--fg-dim); font-size: var(--font-body-small); letter-spacing: 0.04em; text-transform: uppercase; }
+.panel { padding: var(--sp-20) var(--sp-24); }
+.topbar { padding: var(--sp-14) var(--sp-20); }
 
-section { padding: var(--sp-14); border-bottom: 1px solid var(--ctrl-normal-border); }
-section:last-of-type { border-bottom: none; }
-section .field-label { margin-top: var(--sp-12); }
-section .field-label:first-of-type { margin-top: 0; }
+.field-block { margin-top: var(--sp-16); }
+.field-block:first-of-type { margin-top: 0; }
 
 input[type="text"] { width: 100%; }
 
-.om-check {
-  display: flex;
-  align-items: center;
-  margin: var(--sp-10) 0;
-}
+.om-check { margin: var(--sp-10) 0; }
+.om-check + .om-check { margin-top: var(--sp-6); }
 
-footer { padding: var(--sp-14); display: flex; flex-direction: column; gap: var(--sp-8); }
-.actions { display: flex; align-items: center; gap: var(--sp-8); }
-.status { color: var(--fg-dim); font-size: var(--font-body-small); }
-#saved { color: var(--ok); font-weight: 600; font-size: var(--font-body-small); }
+.options-footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-12);
+  padding: var(--sp-16) var(--sp-24);
+  background: var(--bar-bg);
+  border-top: 1px solid var(--ctrl-normal-border);
+}
+.status { color: var(--fg-dim); font-size: var(--font-body-small); line-height: 1.5; }
+.actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--sp-8); }
+#saved {
+  margin-right: auto;
+  color: var(--ok);
+  font-weight: 600;
+  font-size: var(--font-body-small);
+}
+#save { min-width: 96px; }

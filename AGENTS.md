@@ -14,7 +14,7 @@ Omarchy theme via the host's read-only `theme` action).
 |---|---|
 | `extension/` | MV3 extension (no build step; loaded unpacked straight from this dir) |
 | `extension/background-4.js` | owns the single native port, routes messages + the download queue, 200s probe timeout, ~4s `theme` cache (filename is versioned — see Gotchas) |
-| `extension/theme.js` | resolves the host's raw `theme` payload into CSS variables on `:root`; on `getTheme` failure it does **not** re-apply a palette — it labels the header `… · offline` and records the reason in `data-theme-error` |
+| `extension/theme.js` | resolves the host's raw `theme` payload into CSS variables on `:root`; on `getTheme` failure it does **not** re-apply a palette — it labels the header's connection state `offline`/`reload needed` and records the reason in `data-theme-error` |
 | `extension/controls.js` | decorates native selects/checkboxes (custom dropdown + pill toggle) without touching `popup.js`/`options.js` logic |
 | `extension/defaults.js` | single canonical `DEFAULTS` map shared by `popup.js` and `options.js` (both write the same `chrome.storage.local` namespace — a second copy is how default values drift between pages) |
 | `extension/theme.css` | shared Omarchy design-system layer; `:root` holds the **single** Solitude fallback palette (first-paint/no-JS guard) plus layout tokens |
@@ -50,7 +50,7 @@ node /tmp/opencode/test-probe-fsm.mjs          # probe-reply FSM mirror of onPro
 Manual testing: `chrome://extensions` → reload the unpacked extension. A browser
 restart is needed after install (native host manifests + `--load-extension=` flags).
 A **service-worker change needs a reload or full browser quit** (see Gotchas) —
-the popup header showing `solitude · offline` is the tell-tale of a stale SW.
+the popup header showing `reload needed` is the tell-tale of a stale SW.
 Widget QML edits are hot-reloaded by the shell watcher, but a full
 `omarchy restart shell` is the reliable way to pick up `Panel.qml` changes
 (the OSD clone in `najm.osd/` needs one too — see Gotchas).
@@ -107,9 +107,11 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
   fallbacks from the computed `:root` styles at apply time (`readFallbacks()`)
   and holds no palette literals, so a live theme only overrides tokens it
   actually provides and there is no second palette copy to drift.
-  When `getTheme` fails it labels the popup header
-  `solitude · offline` and puts the reason in
+  When `getTheme` fails it labels the header's connection state
+  (`offline`/`reload needed` — `setHostConn`, exported so popup.js can refresh
+  it from the uncached `ping`) and puts the reason in
   `document.documentElement.dataset.themeError` plus a `[theme]` console.warn.
+  The active theme name still lives in the `#themeName` tooltip.
   A second palette copy is how the theme previously "silently never changed"
   during de-duplication — the two sets had already drifted (`--fg-dim`).
 - **Chromium extensions cannot read the browser theme**: `chrome.theme` does
@@ -140,7 +142,7 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
   browser. Symptoms of a stale SW: every `runtime.sendMessage` fails with
   `Could not establish connection. Receiving end does not exist.` (shown as a
   probe error / red host dot), `getTheme` fails, and the popup header shows
-  `solitude · offline`. The popup/`theme.js` map that exact error to a "reload
+  `reload needed`. The popup/`theme.js` map that exact error to a "reload
   the extension" hint; code cannot fix it — only a reload/heal can.
 - Host **hardcodes** `/usr/bin/yt-dlp` and `/usr/bin/ffmpeg` (lines 32-33); ping
   reports their existence, not PATH lookup.

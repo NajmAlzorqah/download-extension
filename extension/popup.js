@@ -41,14 +41,19 @@ function send(msg) {
 const SW_GONE_RE = window.SW_GONE_RE;
 const SW_GONE_MSG =
   window.SW_GONE_DIAG ||
-  "The extension's background worker isn't responding — open chrome://extensions, reload Najm Downloader, then try again.";
+  "The extension's background worker isn't responding. Open chrome://extensions, reload Najm Downloader, then try again.";
 function swGone(message) {
   return SW_GONE_RE.test(String(message || ""));
 }
 
 function checkHost() {
   send({ action: "ping" }).then((r) => {
-    el("hostDot").className = "dot " + (r && r.ok ? "on" : "off");
+    const ok = !!(r && r.ok);
+    const swGoneDiag = swGone(r && r.error) && window.SW_GONE_DIAG;
+    const title = ok ? undefined : swGoneDiag || (r && r.error) || undefined;
+    const kind = ok ? "ok" : swGoneDiag ? "reload" : "offline";
+    if (window.setHostConn) window.setHostConn(kind, title);
+    else el("hostDot").className = "dot " + (ok ? "on" : "off");
   });
 }
 
@@ -120,6 +125,7 @@ function probe() {
   el("downloadBtn").disabled = true;
   el("probeErr").hidden = true;
   el("meta").textContent = "Probing…";
+  el("meta").classList.add("probing");
   el("probeArea").hidden = false;
 
   send({ action: "probe", url: requestedUrl }).then((r) => {
@@ -132,6 +138,7 @@ function probe() {
       el("probeErr").hidden = false;
       const err = (r && r.error) || "Probe failed";
       el("probeErr").textContent = swGone(err) ? SW_GONE_MSG : err;
+      el("meta").classList.remove("probing");
       el("meta").textContent = "";
       // No result for this URL: drop any previous video's data so its options
       // can't be submitted against the new link.
@@ -216,7 +223,7 @@ function renderFormats() {
       updateSizeEstimate();
       formatHint.hidden = !probeData.meta.sample_error;
       formatHint.textContent = probeData.meta.sample_error
-        ? "Couldn't reach the first video to read its resolutions — using presets."
+        ? "Couldn't reach the first video to read its resolutions; using presets."
         : "";
       return;
     }
@@ -425,7 +432,7 @@ function chaptersControlState() {
   const ext = (fmt.formatExt || "").toLowerCase();
   if (fmt.formatId && ext && !CHAPTER_CONTAINERS.includes(ext)) {
     ok = false;
-    reason = `Chapters need MKV/MP4/WebM — this format is ${ext || "a container that can't hold them"}.`;
+    reason = `Chapters need MKV/MP4/WebM; this format is ${ext || "a container that can't hold them"}.`;
   }
   return { visible: true, enabled: ok, reason };
 }
@@ -455,6 +462,7 @@ function renderProbe(r, sourceUrl) {
   // mutating it would leak the collapsed/preset list into the cache for a
   // future reopen (a playlist that fell back to presets would then reopen as
   // a single broken "Audio only" option).
+  el("meta").classList.remove("probing");
   probeData = JSON.parse(JSON.stringify(r));
   // Bind this result to the exact URL it was probed for so the Download
   // button can refuse to ship an old video's selection against a new URL.
@@ -485,6 +493,7 @@ function renderProbe(r, sourceUrl) {
   renderLangs();
   el("opts").hidden = false;
   el("downloadBtn").disabled = false;
+  el("probeArea").hidden = false;
   el("meta").style.display = "";
 }
 
@@ -689,7 +698,7 @@ function onHostEvent(snapshot) {
     if (snapshot.message === "Cancelled") {
       setWarn(null);
       el("msg").textContent = (snapshot.items || []).length
-        ? `Cancelled — ${snapshot.items.length} file(s) saved so far`
+        ? `Cancelled. ${snapshot.items.length} file(s) saved so far`
         : "Cancelled";
     } else {
       setWarn(snapshot.warn || null);
@@ -727,7 +736,7 @@ function startDownload() {
   // silently shipping the previous video's title/format/subtitle selection
   // against the new URL.
   if (probeData.sourceUrl !== url) {
-    setWarn("URL changed since Detect — re-detecting…");
+    setWarn("URL changed since Detect; re-detecting…");
     probe();
     return;
   }
@@ -737,7 +746,6 @@ function startDownload() {
     if (!r || !r.ok) {
       const err = (r && r.error) || "could not start";
       el("msg").textContent = "Error: " + (swGone(err) ? SW_GONE_MSG : err);
-      el("progress").hidden = false;
     }
   });
 }

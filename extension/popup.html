@@ -7,20 +7,28 @@
 </head>
 <body>
   <div class="card">
-    <header>
-      <span class="brand"><span class="glyph">&#xF0DEA;</span>Najm Downloader</span>
-      <span class="hright">
-        <span id="themeName" class="theme-name"></span>
-        <span id="hostDot" class="dot off" title="host status"></span>
-      </span>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-glyph" aria-hidden="true">&#xF0DEA;</span>
+        <span class="brand-word">
+          <span class="brand-name">Najm Downloader</span>
+          <span class="brand-sub">yt-dlp host</span>
+        </span>
+      </div>
+      <div class="hright">
+        <span id="themeName" class="theme-name" role="status"></span>
+        <span class="hchip"><span id="hostDot" class="dot off" title="host status"></span></span>
+      </div>
     </header>
 
-    <section>
+    <section class="panel" id="probePanel">
       <h2 class="section-title">Video</h2>
-      <div class="row url">
-        <input id="url" type="text" placeholder="https://&#x2026;" spellcheck="false">
-        <button id="probeBtn" class="ghost">Detect</button>
+      <div class="url-field">
+        <input id="url" type="text" placeholder="Paste a video URL&#x2026;" spellcheck="false" autocomplete="off">
+        <button id="probeBtn" class="btn ghost">Detect</button>
       </div>
+      <p id="probeHint" class="probe-hint">Open a video page first, or paste a link. The active tab URL fills in automatically.</p>
       <div id="probeArea" hidden>
         <div id="meta" class="meta"></div>
         <div id="sizeRow" class="muted" hidden>Estimated size: <b id="sizeEst"></b></div>
@@ -28,40 +36,40 @@
       </div>
     </section>
 
-    <section id="opts" hidden>
+    <section id="opts" class="panel" hidden>
       <h2 class="section-title">Options</h2>
 
-      <label class="field-label" for="formatSelect">Video quality</label>
-      <select id="formatSelect" disabled></select>
-      <div id="formatHint" class="muted" hidden></div>
-
-      <label class="check">
-        <input type="checkbox" id="subsOn"> Download subtitles
-      </label>
-      <div id="subHint" class="muted" hidden></div>
-      <div id="subsOpts" hidden>
-        <label class="check sub">
-          <input type="checkbox" id="autoSubs"> Include auto-generated captions
-        </label>
-        <div class="grid2">
-          <div>
-            <label class="field-label">Languages offered</label>
-            <select id="langs"></select>
-          </div>
-          <div>
-            <label class="field-label">Subtitle format</label>
-            <select id="subFormat" disabled></select>
-          </div>
-        </div>
-        <label class="check sub"><input type="checkbox" id="convertSrt"> Convert to SRT</label>
-        <label class="check sub"><input type="checkbox" id="embed"> Embed subtitles in file</label>
+      <div class="field-block">
+        <label class="field-label" for="formatSelect">Video quality</label>
+        <select id="formatSelect" disabled></select>
+        <div id="formatHint" class="muted" hidden></div>
       </div>
 
-      <label class="check">
-        <input type="checkbox" id="playlist"> Download entire playlist
-      </label>
+      <div class="field-block">
+        <label class="check"><input type="checkbox" id="subsOn"> Download subtitles</label>
+        <div id="subHint" class="muted" hidden></div>
+        <div id="subsOpts" class="subs-options" hidden>
+          <label class="check sub"><input type="checkbox" id="autoSubs"> Auto-generated captions</label>
+          <div class="grid2">
+            <div class="field-block">
+              <label class="field-label" for="langs">Languages offered</label>
+              <select id="langs"></select>
+            </div>
+            <div class="field-block">
+              <label class="field-label" for="subFormat">Format</label>
+              <select id="subFormat" disabled></select>
+            </div>
+          </div>
+          <label class="check sub"><input type="checkbox" id="convertSrt"> Convert to SRT</label>
+          <label class="check sub"><input type="checkbox" id="embed"> Embed into video</label>
+        </div>
+      </div>
 
-      <div id="chaptersWrap" hidden>
+      <div class="field-block">
+        <label class="check"><input type="checkbox" id="playlist"> Download entire playlist</label>
+      </div>
+
+      <div id="chaptersWrap" class="field-block" hidden>
         <label class="field-label" for="chapters">Video sections (chapters)</label>
         <select id="chapters" disabled>
           <option value="off">Don't store sections</option>
@@ -71,34 +79,38 @@
         <div id="chaptersHint" class="muted" hidden></div>
       </div>
 
-      <div class="row out">
+      <div class="field-block save-to">
         <label class="field-label" for="outDir">Save to</label>
         <span id="outDir" class="mono"></span>
       </div>
 
       <button id="downloadBtn" class="btn primary" disabled>Download</button>
-      <button id="pauseBtn" class="btn" hidden>Pause</button>
-      <button id="cancelBtn" class="btn danger" hidden>Cancel</button>
+      <div class="actions-row">
+        <button id="pauseBtn" class="btn" hidden>Pause</button>
+        <button id="cancelBtn" class="btn danger" hidden>Cancel</button>
+      </div>
 
-      <div id="progress" hidden>
+      <div id="progress" class="progress" hidden>
         <div class="progress-row">
           <div class="bar"><div id="barFill"></div></div>
-          <div id="pct" class="mono"></div>
+          <div id="pct" class="mono pct"></div>
         </div>
-        <div id="dlSize" class="muted"></div>
-        <div id="speed" class="muted"></div>
-        <div id="msg" class="muted end"></div>
+        <div class="progress-stats">
+          <div id="dlSize"></div>
+          <div id="speed"></div>
+        </div>
       </div>
+      <div id="msg" class="status-line"></div>
       <div id="warn" class="warn" hidden></div>
     </section>
 
-    <section id="queueSection" hidden>
+    <section id="queueSection" class="panel" hidden>
       <h2 class="section-title">Queue</h2>
       <ul id="queueList"></ul>
     </section>
 
     <footer>
-      <a id="optsLink" href="#">Options &#x203A;</a>
+      <a id="optsLink" class="opts-link" href="#">Options <span class="chev" aria-hidden="true">&#x203A;</span></a>
     </footer>
   </div>
 

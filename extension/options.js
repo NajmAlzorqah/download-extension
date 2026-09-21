@@ -34,7 +34,7 @@ chrome.runtime.sendMessage({ action: "ping" })
   .then((r) => {
     el("hostStatus").textContent = r && r.ok
       ? `native host OK · yt-dlp ${r.ytdlp ? "✓" : "✗"} · ffmpeg ${r.ffmpeg ? "✓" : "✗"}`
-      : "native host NOT detected — run install.sh and restart the browser";
+      : "native host NOT detected; run install.sh and restart the browser";
   })
   .catch(() => {
     el("hostStatus").textContent = "extension background unavailable";
