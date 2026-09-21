@@ -53,7 +53,7 @@ either surface:
 ```
 extension/          MV3 extension (manifest rendered by install.sh)
   manifest.json.in  template — @@KEY@@ is replaced with your RSA public key
-  background-4.js   owns a single native-messaging port, routes probe/download/cancel/reorder/getQueue + the queue (filename versioned! see Troubleshooting)
+  background-6.js   owns the native port (drops it when idle so the shim exits + the SW can suspend), routes probe/download/cancel/reorder/getQueue + the queue (filename versioned! see Troubleshooting)
   popup.{html,css,js}  toolbar popup
   options.{html,css,js} defaults (output dir, resolutions, subtitle defaults)
   theme.{js,css}       live Omarchy theme → CSS vars on :root
@@ -214,9 +214,8 @@ whitelist-validated.
   `chrome://extensions` → reload "Najm Downloader", or fully quit the browser
   (a window close can leave background processes keeping the old SW alive).
   Chromium caches MV3 service workers for `--load-extension` extensions, so SW
-  changes also need the filename bumped (currently `background-4.js`, the
-  download-queue bump from `background-2.js`) before reload — same trick as
-  the Omarchy `copy-url` extension.
+  changes also need the filename bumped (currently `background-6.js`) before
+  reload — same trick as the Omarchy `copy-url` extension.
 - Probe shows **`Could not establish connection. Receiving end does not exist.`**
   → the service worker isn't answering (stale cached worker, see above). Reload
   the extension from `chrome://extensions` or fully quit the browser — no

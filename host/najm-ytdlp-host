@@ -210,6 +210,18 @@ PROBE_LOCK = threading.Lock()
 probe_waiters = {}
 probe_cache = {}
 
+# read_theme() runs in the single dispatch thread, so these TTL caches need no
+# locking. hyprctl (~8ms spawn) and fc-match (~15ms spawn) are re-invoked on
+# every popup/options `theme` action past the SW's ~4s cache; the values are
+# near-invariant at runtime, so cache them long enough to make theme requests
+# pure file reads. Both TTLs are capped at a minute so a live `omarchy theme
+# set` (new radius/font) propagates within ~60s instead of lingering, and a
+# failed probe is forgotten just as quickly.
+THEME_HYPR_TTL = 60.0
+THEME_FONT_TTL = 60.0
+_theme_hypr = {"t": 0.0, "v": None}
+_theme_font = {"t": 0.0, "v": None}
+
 
 def sanitize_selection(sel):
     """Echo-safe copy of a download selection.
@@ -429,30 +441,41 @@ def _parse_toml_lite(text):
 
 
 def _hyprctl_rounding():
+    now = time.monotonic()
+    if now - _theme_hypr["t"] <= THEME_HYPR_TTL:
+        return _theme_hypr["v"]
     try:
         proc = subprocess.run(
             ["hyprctl", "-j", "getoption", "decoration:rounding"],
             capture_output=True, text=True, timeout=3)
     except (OSError, subprocess.TimeoutExpired):
-        return None
-    if proc.returncode != 0:
-        return None
-    try:
-        n = int(json.loads(proc.stdout).get("int"))
-    except (ValueError, TypeError):
-        return None
-    return n if 0 <= n <= 64 else None
+        n = None
+    else:
+        n = None
+        if proc.returncode == 0:
+            try:
+                n = int(json.loads(proc.stdout).get("int"))
+            except (ValueError, TypeError):
+                n = None
+    _theme_hypr.update(t=now, v=n if n is not None and 0 <= n <= 64 else None)
+    return _theme_hypr["v"]
 
 
 def _fc_match_mono():
+    now = time.monotonic()
+    if now - _theme_font["t"] <= THEME_FONT_TTL:
+        return _theme_font["v"]
     try:
         proc = subprocess.run(
             ["fc-match", "-f", "%{family[0]}", "monospace"],
             capture_output=True, text=True, timeout=3)
     except (OSError, subprocess.TimeoutExpired):
-        return None
-    name = proc.stdout.strip()
-    return name if name and RE_FONT_NAME.match(name) else None
+        name = ""
+    else:
+        name = proc.stdout.strip()
+    name = name if name and RE_FONT_NAME.match(name) else None
+    _theme_font.update(t=now, v=name)
+    return _theme_font["v"]
 
 
 def read_theme():
@@ -1107,8 +1130,15 @@ def _download_worker(job):
         # alive — it hides after its own duration. Progress ticks call this
         # ~1/s; the subtitle lock probe's retry gaps call it with None to
         # re-show the last percent, so the bar doesn't expire mid-probe.
+        #
+        # One refresh gate (2.5s): every osd_progress() spawns an
+        # `omarchy-shell` subprocess (~46ms), and an earlier separate 0.25s
+        # pct-change block doubled that to a shell spawn per second for the
+        # whole download. 2.5s stays well inside the 8s card life while
+        # cutting shell-PID churn ~2-4x; pct updates inline, so the card
+        # always re-shows the latest value.
         now = time.monotonic()
-        if now - osd_keepalive_ms[0] < 1.0:
+        if now - osd_keepalive_ms[0] < 2.5:
             return
         osd_keepalive_ms[0] = now
         if pct is not None:
@@ -1117,7 +1147,10 @@ def _download_worker(job):
 
     if osd_available():
         osd_progress(0, title)
-    osd_state = {"int": -1, "ms": 0.0}
+        # The card was just shown at 0%; arm the refresh gate so the first
+        # progress tick is accepted right away instead of waiting out a full
+        # 2.5s window against a fresh (0.0) keepalive.
+        osd_keepalive_ms[0] = time.monotonic()
 
     is_pl = sel.get("playlist") is True and is_playlist_url(url)
 
@@ -1294,11 +1327,6 @@ def _download_worker(job):
                     send({"event": "progress", "queueId": job["id"],
                           "pct": round(pct, 1), "speed": speed, "eta": eta,
                           "downloaded": downloaded, "total": total})
-                if osd_available():
-                    ipct = int(pct)
-                    if ipct != osd_state["int"] and now - osd_state["ms"] >= 0.25:
-                        osd_state["int"], osd_state["ms"] = ipct, now
-                        osd_progress(ipct, title)
                 _osd_refresh(int(pct))
                 continue
             if line.startswith("NJDP:FILE\t"):

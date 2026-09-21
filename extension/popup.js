@@ -28,6 +28,11 @@ let urlTouched = false;
 // True while the active download is SIGSTOP'd on the host; drives the
 // Pause/Resume toggle label and the frozen "Paused" hint.
 let pausedNow = false;
+// Signature of the last queue render. Progress broadcasts arrive ~4x/s while a
+// download runs and each one re-renders the (usually unchanged) waiting queue;
+// skipping the DOM rebuild when the visible rows really didn't change keeps the
+// popup idle instead of churning <li> nodes every 250ms.
+let lastQueueSig = null;
 
 function send(msg) {
   return chrome.runtime.sendMessage(msg).catch((e) => ({ ok: false, error: String(e) }));
@@ -608,7 +613,13 @@ function renderQueue(queue) {
   const section = el("queueSection");
   const list = el("queueList");
   const waiting = (Array.isArray(queue) ? queue : []).filter((it) => it && it.status === "queued");
-  section.hidden = waiting.length === 0;
+  const sig = waiting
+    .map((it, i) => `${it.id}|${it.status}|${i}|${(it.selection && it.selection.title) || it.url || ""}`)
+    .join("\n");
+  const hidden = waiting.length === 0;
+  if (sig === lastQueueSig && hidden === (section.hidden === true)) return;
+  lastQueueSig = sig;
+  section.hidden = hidden;
   list.textContent = "";
   waiting.forEach((it, i) => {
     const row = document.createElement("li");
@@ -781,6 +792,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   const { state } = await send({ action: "getState" });
   if (state) onHostEvent(state);
 
+  // The SW drops the native port when idle, so between popup opens it may have
+  // missed broadcasts of a widget-started download. Force a reconnect + host
+  // refresh so a running job reopens as the live progress view rather than the
+  // cached idle snapshot (the getQueue hostEvent mirrors it down to us).
+  send({ action: "getQueue" });
+
   const target = el("url").value.trim();
   if (!target) return;
 
@@ -795,17 +812,25 @@ document.addEventListener("DOMContentLoaded", async () => {
   // autoplay advances). Follow it so the field and the probe never stay stuck
   // on the link the popup happened to open with.
   if (tab && tab.id != null) {
+    // SPA navigations can burst several onUpdated events in one tick (link
+    // rewrites, redirect chains); each URL hop also passed through our own
+    // assignment above. Debounce so we settle on the URL, not every stop.
+    let followTimer = null;
     const onTabUpdated = (id, info) => {
       if (id !== tab.id || !info.url) return;
       if (urlTouched || !info.url.startsWith("http")) return;
       if (info.url === el("url").value.trim()) return;
-      el("url").value = info.url;
-      probe();
+      clearTimeout(followTimer);
+      followTimer = setTimeout(() => {
+        el("url").value = info.url;
+        probe();
+      }, 250);
     };
     chrome.tabs.onUpdated.addListener(onTabUpdated);
-    window.addEventListener("unload", () =>
-      chrome.tabs.onUpdated.removeListener(onTabUpdated)
-    );
+    window.addEventListener("unload", () => {
+      clearTimeout(followTimer);
+      chrome.tabs.onUpdated.removeListener(onTabUpdated);
+    });
   }
 });
 

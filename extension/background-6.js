@@ -4,6 +4,19 @@ let port = null;
 let connecting = false;
 let requestId = 0;
 const pendings = new Map();
+// True for the ~0ms between maybeDropIdlePort's disconnect() and the
+// onDisconnect callback: distinguishes "we closed the port because nothing is
+// happening" (host is fine, keep state.alive) from "the host/shim actually
+// died" (reload signal / offline header).
+let intentionalDrop = false;
+// True once a real (non-deliberate) disconnect is seen: the shared agent
+// outlived the shim, so the next connection must re-adopt the host's queue
+// instead of trusting the snapshot from before the drop.
+let needsReAdopt = false;
+// Monotonic-ish clock of the last host message received. The idle port is only
+// closed once this has been quiet for IDLE_DROP_QUIET_MS, so a request's
+// follow-up `queue` broadcast can never lose the race to the close.
+let lastHostTraffic = 0;
 
 const state = {
   alive: false,
@@ -33,6 +46,31 @@ const state = {
 function emit(extra) {
   const snapshot = { ...state, ...extra };
   chrome.runtime.sendMessage({ action: "hostEvent", snapshot }).catch(() => {});
+  // Every state-broadcast is a chance the work may have settled; dropping the
+  // idle port here covers ping/probe/done/queue-empty alike, so the SW isn't
+  // relying on one specific transition to notice it can go to sleep. Dropping
+  // is deferred: a request's reply is emitted before the caller's .then adopts
+  // the fresh state (getQueue/probe), and download/cancel/pause/reorder carry
+  // their real state in a follow-up `queue` broadcast a moment later —
+  // maybeDropIdlePort() waits that out via the quiet window instead of closing
+  // the port on a stale-empty queue.
+  scheduleIdleDrop();
+}
+
+// The native port is closed only once no host message has arrived for this
+// long. A reply to download/cancel/pause/reorder is always followed by the
+// `queue` broadcast that actually updates the mirror; a 0ms close could land
+// in that gap and silently lose both the mirror update and the per-job stream
+// for a job the agent is still downloading.
+const IDLE_DROP_QUIET_MS = 300;
+
+let idleDropTimer = null;
+function scheduleIdleDrop(ms = 0) {
+  if (idleDropTimer) return;
+  idleDropTimer = setTimeout(() => {
+    idleDropTimer = null;
+    maybeDropIdlePort();
+  }, ms);
 }
 
 function ensureConnected() {
@@ -49,25 +87,26 @@ function ensureConnected() {
       return;
     }
 
-    const drop = () => {
-      const wasServing = !!port;
-      port = null;
-      connecting = false;
-      state.queue = [];
-      state.activeId = null;
-      if (wasServing) {
-        state.status = "idle";
-        emit();
-      }
-    };
-
     port.onMessage.addListener((msg) => {
       handleHostMessage(msg);
     });
     port.onDisconnect.addListener(() => {
-      drop();
+      const deliberate = intentionalDrop;
+      intentionalDrop = false;
+      port = null;
+      connecting = false;
+      if (deliberate) {
+        // We closed the port on purpose (idle) — the host is still healthy,
+        // just unreachable until next demand. Leave state.alive/queue alone.
+        return;
+      }
+      // Real drop: the shim (or the browser's side of the port) died. The
+      // shared agent and its queue survive a dead shim, so a running download
+      // is still running and must not be blanked — keep state.queue/status and
+      // re-adopt the host's queue when the next connection comes up.
+      failPendings();
+      needsReAdopt = true;
       if (!state.alive) return;
-      // Reconnect for the next request; the host survives a dead tab/sw.
       state.alive = false;
       emit();
       const err = chrome.runtime.lastError;
@@ -76,7 +115,52 @@ function ensureConnected() {
 
     connecting = false;
     resolve(port);
+    if (needsReAdopt) {
+      needsReAdopt = false;
+      // The queue the agent kept is authoritative; re-fetch it so an open
+      // popup's progress view returns without waiting for a new `queue`
+      // broadcast to arrive on the fresh connection.
+      hostQueue().then((res) => {
+        if (res && res.ok && res.queue) {
+          adoptQueue(res.queue);
+          persistQueueNow();
+          emit();
+        }
+      });
+    }
   });
+}
+
+// The native port is only needed while work might be happening: an open port
+// keeps the browser's shim (≈20MB RSS) alive and stops this MV3 service worker
+// from ever suspending. Once every pending request has settled AND nothing is
+// downloading/probing AND the queue is empty, close the port and let the shim
+// exit. Reconnect is demand-driven (ensureConnected), and the shared agent
+// daemon keeps the queue across that gap, so nothing is lost by closing it.
+function maybeDropIdlePort() {
+  if (!port || connecting) return;
+  if (pendings.size > 0) return;
+  if (state.queue.length > 0) return;
+  if (state.status === "downloading" || state.status === "probing" || state.paused) return;
+  const quiet = Date.now() - lastHostTraffic;
+  if (quiet < IDLE_DROP_QUIET_MS) {
+    // A request just answered; its `queue` broadcast may still be in flight.
+    // Re-check once the quiet window elapses instead of racing it.
+    scheduleIdleDrop(IDLE_DROP_QUIET_MS - quiet);
+    return;
+  }
+  const p = port;
+  port = null;
+  intentionalDrop = true; // onDisconnect: host fine, don't flip state.alive.
+  try {
+    p.disconnect();
+  } catch (err) {
+    // The port was already gone (the browser tore it down, so its onDisconnect
+    // is queued and will consume intentionalDrop as a deliberate close).
+    // Deferred untick guards the corner where no onDisconnect ever arrives, so
+    // a later genuine drop can't be misread as this intentional one.
+    setTimeout(() => { intentionalDrop = false; }, 250);
+  }
 }
 
 // The done/error/cancelled/start/queue transitions all clear the same five
@@ -127,6 +211,7 @@ function adoptQueue(queue) {
 }
 
 function handleHostMessage(msg) {
+  lastHostTraffic = Date.now();
   if (msg && msg.event && msg.event !== "progress") {
     if (msg.event === "done") {
       resetTo({ status: "done", items: msg.items || [], pct: 100, warn: msg.warn || null });
@@ -185,6 +270,16 @@ function nextReq() {
   return ++requestId;
 }
 
+// Reject every in-flight request against a dead port: with the shim gone the
+// replies will never arrive, so callers (ping/probe/getQueue) must resolve
+// promptly instead of waiting out their full timeouts.
+function failPendings(error = "native host disconnected") {
+  if (!pendings.size) return;
+  const stuck = [...pendings.values()];
+  pendings.clear();
+  for (const p of stuck) p.resolve({ ok: false, error });
+}
+
 // One-shot request over the native port. Registers a pending, times it out,
 // and resolves with the host's reply (or `{ok:false, error}` on timeout /
 // post failure). Per-type state updates still happen in handleHostMessage via
@@ -196,6 +291,7 @@ function request(p, action, body = {}, timeout = 10000, timeoutError = "request 
       if (pendings.has(req)) {
         pendings.delete(req);
         resolve({ ok: false, error: timeoutError });
+        maybeDropIdlePort();
       }
     }, timeout);
     pendings.set(req, {
@@ -211,6 +307,7 @@ function request(p, action, body = {}, timeout = 10000, timeoutError = "request 
       clearTimeout(timer);
       pendings.delete(req);
       resolve({ ok: false, error: String(err) });
+      maybeDropIdlePort();
     }
   });
 }
@@ -340,6 +437,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           if (res && res.ok && res.queue) {
             adoptQueue(res.queue);
             persistQueueNow();
+            // The popup reopens from cached getState while the SW may have
+            // been idle (port closed, no live broadcasts): shadow a hostEvent
+            // so a widget-started download reappears instead of the stale
+            // idle view.
+            emit();
             sendResponse({ ok: true, queue: state.queue });
           } else {
             sendResponse({ ok: false, error: (res && res.error) || "queue unavailable" });
