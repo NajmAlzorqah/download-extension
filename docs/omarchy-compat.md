@@ -48,3 +48,10 @@ checks the raw `ping` payload (`osd`, `osdIssue`, `deps`).
 - `ping` reply is additive-forward-compatible (`osd`, `osdIssue`, `deps` were
   added without breaking the `ytdlp`/`ffmpeg` booleans the browser classifiers
   key on).
+- Setup marker (`~/.local/state/najm-downloads/installed.json`) schema: the
+  journal fields `installed_from` (dir the browser side is served from),
+  `served_git` (that checkout's HEAD at install, best-effort) and
+  `flags_confs` (flags-conf names, because `profiles` dirs don't map 1:1 to
+  conf names) drive the removal watcher and marker-driven `uninstall.sh`.
+  install.sh writes them; uninstall.sh and `Panel.qml` read them — keep the
+  field names in sync if any side evolves.

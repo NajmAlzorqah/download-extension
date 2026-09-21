@@ -74,8 +74,11 @@ host/
                              unix-socket agent (owns the shared queue)
   com.najm.ytdlp.json.tpl    host manifest template (@@HOST_PATH@@/@@EXT_ORIGIN@@)
 install.sh / uninstall.sh  browser-side installer/uninstaller (10 Chromium-family
-                             profiles; run by the widget's first click or by hand)
+                             profiles; run by the widget's first click or by hand).
+                             install.sh also arms the removal watcher; uninstall.sh
+                             is marker-driven (see Uninstall)
 tools/make-icons.py       icon generator (`uv run --directory tools python make-icons.py`)
+tools/omarchy-remove.sh   full teardown from the console (uninstall + plugin remove)
 tools/perf-check.sh       samples agent/shim RSS+CPU, or counts OSD spawns
 ```
 
@@ -261,15 +264,23 @@ whitelist-validated.
 ## Uninstall
 
 ```bash
-./uninstall.sh
+./uninstall.sh          # browser side + runtime, then remove the plugin below
+tools/omarchy-remove.sh # both at once, from the console
 ```
 
-Removes the host manifests and icon registration from all ten profiles, strips
-the extension from `--load-extension=` (preserving other tools' entries; `.najm-bak`
-stays as a manual safety net), and deletes the marker. The extension id is
-pinned by the committed key, so there is nothing to purge — re-install with
-`./install.sh`. To remove the Omarchy plugin itself:
-`omarchy plugin remove najm.downloads --yes`.
+`uninstall.sh` is marker-driven: it removes exactly what `install.sh` recorded
+— the host manifests from the ten Chromium-family profiles, the extension from
+`--load-extension=` (preserving other tools' entries; `.najm-bak` stays as a
+manual safety net), the yt-dlp agent (whole process group) and its runtime
+dirs, the removal watcher, and the marker. The extension id is pinned by the
+committed key, so there is nothing to purge — re-install with `./install.sh`.
+
+To remove the Omarchy plugin itself, `omarchy plugin remove najm.downloads
+--yes`: since `plugin remove` runs no scripts, the watcher install.sh arms then
+catches it — it runs the state-dir `uninstall.sh --if-plugin-gone`, which
+cleans the browser side whenever the recorded `installed_from` dir is gone, so
+a re-`plugin add` starts fresh (the widget's setup pane reappears). An install
+served from your own dev checkout is never touched automatically.
 
 ## Contributing
 

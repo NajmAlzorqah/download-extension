@@ -34,7 +34,7 @@ Omarchy theme via the host's read-only `theme` action).
 | `host/najm-ytdlp-host` | single-file stdlib-only Python host with two modes: the default **shim** serves the browser's 4-byte LE length-prefixed JSON on stdio by relaying it to the JSON-lines **agent** daemon over a unix socket; `--agent` runs the long-lived daemon that owns the shared queue (see "Shared queue daemon") |
 | `host/com.najm.ytdlp.json.tpl` | NativeMessagingHosts manifest template (`@@HOST_PATH@@`, `@@EXT_ORIGIN@@`) |
 | `host/browsers.sh` | single source of browser coverage for `install.sh`/`uninstall.sh`: canonical roots + conservative discovery (only registers a non-canonical Chromium-family root whose flags conf already exists — never invents paths) |
-| `install.sh` / `uninstall.sh` | register/deregister the browser side in the ten Chromium-family profiles; install.sh writes the marker the widget reads |
+| `install.sh` / `uninstall.sh` | register/deregister the browser side in the ten Chromium-family profiles; install.sh writes the marker the widget reads and arms the removal watcher; uninstall.sh is marker-driven (acts on `installed.json`, not its own dir — the state-dir copy install.sh refreshes is what the watcher runs) |
 | `tools/make-icons.py` | regenerates `extension/icons/*.png` |
 | `tools/perf-check.sh` | samples agent/shim/quickshell RSS + CPU over a window, or counts `najm.osd` "show" spawns — the measurement tool behind the OSD/theme perf fixes (see Commands) |
 | `~/.config/omarchy/plugins/najm.downloads/` | the installed clone of this repo (git-managed by `omarchy plugin add`; never edit in place — commit upstream and `omarchy plugin update`) |
@@ -49,7 +49,9 @@ omarchy plugin add <git-url> --enable              # install the plugin (clones 
 qmllint -I /usr/share/omarchy/shell Panel.qml Osd.qml
 python3 -m py_compile host/najm-ytdlp-host         # only host syntax check that exists
 ./install.sh                                      # browser side (widget first-click does this)
-./uninstall.sh
+./uninstall.sh                                    # full cleanup, marker-driven
+./uninstall.sh --if-plugin-gone                   # watcher mode: no-op unless installed_from dir is gone
+tools/omarchy-remove.sh                           # uninstall.sh + omarchy plugin remove (fully clean reinstall)
 uv run --directory tools python make-icons.py      # regenerate icons (dep-free script)
 tools/perf-check.sh [--seconds 15] [--spawns 60]   # sample agent/shim/quickshell RSS+CPU, or OSD-show spawn rate
 ```
@@ -344,6 +346,45 @@ was asked about (dropping superseded replies and clearing `probeData` on
 failure) so an earlier video's metadata can't land on the current one. The
 cache is session-scoped and lost on browser restart/extension reload.
 
+## Removal & update model
+
+`omarchy plugin remove najm.downloads` only disables the plugin and `rm -rf`s
+its clone (it runs no scripts), so the browser side must not live solely inside
+the plugin. The removal/update contract keeps a reinstall **guaranteed fresh**:
+
+- **Marker journal.** `installed.json` records `installed_from` (the dir the
+  browser side is served from at install time) and `served_git` (that checkout's
+  `git rev-parse HEAD`, best-effort), plus `flags_confs` (the flags-conf names,
+  since `profiles` — `~/.config`-relative dirs — don't map 1:1 to conf names).
+- **Removal watcher.** install.sh copies `uninstall.sh` to
+  `~/.local/state/najm-downloads/` and arms two systemd user units
+  (`najm-downloads-watch.path` → `najm-downloads-cleanup.service`). The path
+  unit watches `~/.config/omarchy/plugins/` with `PathChanged` — which fires on
+  top-level add/remove (a plugin removal) but **not** on in-subdir git pulls,
+  so updates land on the widget's self-heal, never on the watcher. The service
+  runs the state-dir copy `uninstall.sh --if-plugin-gone`, which exits 0 unless
+  the recorded `installed_from` dir is gone — other plugins' add/remove and
+  `omarchy plugin update` never trigger it. A dev-checkout install
+  (`installed_from` = your checkout, still present) is likewise never touched.
+- **Marker-driven uninstall.** `uninstall.sh` no longer sources
+  `host/browsers.sh`; it strips exactly the recorded `extension_dir` from each
+  recorded flags conf, removes the recorded NativeMessagingHosts manifests,
+  **process-group-kills** the agent (it runs `start_new_session=True` and has no
+  SIGTERM handler — killing just it would orphan the child yt-dlp), removes both
+  runtime dirs, disarms the watcher, and deletes the marker + its own state-dir
+  copy. It therefore runs identically from the clone, a checkout, or the state
+  copy (which is what survives the plugin's removal). Downloads are untouched.
+- **Update self-heal.** `Panel.qml` compares the clone's `HEAD` against
+  `served_git`: marker from a different checkout → a "Update to this plugin's
+  version" button (never auto — the dev loop stays untouched); marker from this
+  clone and the clone updated → install.sh re-runs automatically on shell load
+  (idempotent; the marker's `served_git` then matches). Requires a shell
+  restart to pick up a newer Panel.qml (see Gotchas).
+- **In-widget uninstall.** The popup's Manage footer runs the state-dir
+  `uninstall.sh`, then `omarchy plugin remove najm.downloads --yes` (the widget
+  is unloaded by the rescan — that is the point). `tools/omarchy-remove.sh` is
+  the same teardown from the console.
+
 ## Widget (`najm.downloads`)
 
 The bar-widget **is this repo** (`Panel.qml` at the root; the installed clone
@@ -358,7 +399,7 @@ of `background-6.js` — it talks JSON-lines to the agent directly, with no
 | File | Role |
 |---|---|
 | `manifest.json` | Omarchy plugin manifest (id `najm.downloads`, kinds `bar-widget` + `panel`) |
-| `Panel.qml` | shared-queue monitor + first-click setup pane (installs the browser side until the marker exists): progress view, cancel/pause/resume the active job, queue reorder/remove, connection state (only file with QML; hot-reloaded by the shell watcher, reliable pickup via `omarchy restart shell`) |
+| `Panel.qml` | shared-queue monitor + first-click setup pane (installs the browser side until the marker exists): progress view, cancel/pause/resume the active job, queue reorder/remove, connection state, and a Manage footer (update self-heal, "Update to this plugin's version", in-widget uninstall — see Removal & update model). Only file with QML; hot-reloaded by the shell watcher, reliable pickup via `omarchy restart shell` |
 | `Client.js` | JSON-lines frame builders + reply classifiers mirroring the agent contract (keep in sync with the host's `AGENT_SOCK_*` / dispatch) |
 | `Formats.js` | probe-option helpers ported from `extension/popup.js` (see Parser coupling — `summarizeSelection`/labels must track popup.js) |
 | `Defaults.js` | mirrors `extension/defaults.js` — a **second copy** and the known defaults-drift surface (kept for the node unit harness, which loads it for `DEFAULTS`; the widget itself no longer builds selections) |

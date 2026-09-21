@@ -24,8 +24,14 @@ MANIFEST_NAME="com.najm.ytdlp.json"
 STATE_DIR="$HOME/.local/state/najm-downloads"
 MARKER="$STATE_DIR/installed.json"
 
+# Journal fields: which checkout the browser side is served from and at which
+# commit, so the widget can self-heal after an update and uninstall.sh can act
+# on what install actually wrote (the marker, not this script's own dir).
+INSTALLED_FROM="$ROOT"
+SERVED_GIT="$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || true)"
+
 # Canonical browser coverage + conservative discovery (single source in
-# host/browsers.sh, shared with uninstall.sh so the lists can't drift).
+# host/browsers.sh; uninstall.sh replays what this records into the marker).
 # All canonical Chromium-family roots that use the NativeMessagingHosts layout
 # are written unconditionally (Omarchy-parity + this project's Brave-Origin);
 # a discovered root is only registered when its flags conf already exists on
@@ -211,19 +217,30 @@ fi
 # ---------------------------------------------------------------- marker
 # The widget flips out of "setup needed" when this file exists and reads
 # `profiles` for its success hint. Never written into the plugin dir, so
-# `omarchy plugin update` stays a clean fast-forward.
+# `omarchy plugin update` stays a clean fast-forward. The journal fields
+# (installed_from/served_git/flags_confs) drive the removal watcher and the
+# marker-driven uninstall.sh — flag conf names are recorded because profiles
+# (dirs under ~/.config) don't map 1:1 to flags-conf names.
 mkdir -p "$STATE_DIR"
-python3 - "$MARKER" "$EXT_DIR" "$ID" "$HOST" "$YOUTUBE_OK" "$FFMPEG_OK" "${written[@]}" <<'PY'
+CFLAGS_ARG="$(IFS=,; echo "${FLAGS_CONFS[*]}")"
+python3 - "$MARKER" "$EXT_DIR" "$ID" "$HOST" "$YOUTUBE_OK" "$FFMPEG_OK" \
+  "$SERVED_GIT" "$INSTALLED_FROM" "$CFLAGS_ARG" "${written[@]}" <<'PY'
 import json, sys, time
 marker, ext_dir, ext_id, host = sys.argv[1:5]
 yt = sys.argv[5] == "1"
 ff = sys.argv[6] == "1"
-profiles = sys.argv[7:]
+served_git = sys.argv[7]
+installed_from = sys.argv[8]
+flags_confs = [c for c in sys.argv[9].split(",") if c]
+profiles = sys.argv[10:]
 data = {
     "extension_dir": ext_dir,
     "extension_id": ext_id,
     "host_binary": host,
     "profiles": profiles,
+    "flags_confs": flags_confs,
+    "installed_from": installed_from,
+    "served_git": served_git,
     "ytdlp": yt,
     "ffmpeg": ff,
     "installed_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -233,6 +250,49 @@ with open(marker, "w") as f:
     f.write("\n")
 PY
 echo "marker -> $MARKER"
+
+# ---------------------------------------------------------------- removal watcher
+# `omarchy plugin remove` only deletes the plugin clone — it never runs
+# uninstall.sh. A systemd user path watcher on the plugins dir catches a real
+# removal (top-level dir add/remove; git pulls inside a clone don't fire it) and
+# runs a state-dir copy of uninstall.sh in --if-plugin-gone mode: a no-op unless
+# the recorded installed_from dir is gone. The copy is refreshed here and stays
+# self-contained (marker-driven, no ROOT dependency) after the clone is deleted.
+cp "$ROOT/uninstall.sh" "$STATE_DIR/uninstall.sh"
+chmod +x "$STATE_DIR/uninstall.sh"
+if systemctl --user show-environment >/dev/null 2>&1; then
+  UNIT_DIR="$HOME/.config/systemd/user"
+  mkdir -p "$UNIT_DIR"
+  cat > "$UNIT_DIR/najm-downloads-cleanup.service" <<EOF
+[Unit]
+Description=Clean up Najm Downloader browser side when the plugin clone is removed
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/state/najm-downloads/uninstall.sh --if-plugin-gone
+EOF
+  cat > "$UNIT_DIR/najm-downloads-watch.path" <<EOF
+[Unit]
+Description=Watch the Omarchy plugins dir for Najm Downloader removal
+
+[Path]
+PathChanged=%h/.config/omarchy/plugins/
+Unit=najm-downloads-cleanup.service
+
+[Install]
+WantedBy=default.target
+EOF
+  if systemctl --user daemon-reload >/dev/null 2>&1 &&
+     systemctl --user enable --now najm-downloads-watch.path >/dev/null 2>&1; then
+    echo "watcher  -> omarchy plugin remove now uninstalls the browser side too"
+  else
+    echo "warn     could not arm the systemd path watcher — a plugin removal"
+    echo "         won't auto-unregister the browser side; uninstall.sh still works"
+  fi
+else
+  echo "warn     systemd user manager not running — a plugin removal won't"
+  echo "         auto-unregister the browser side; uninstall.sh still works"
+fi
 
 # ---------------------------------------------------------------- summary
 echo
