@@ -1,36 +1,59 @@
 #!/usr/bin/env bash
-# Uninstall Najm Downloader: remove NativeMessagingHosts manifests, restore
-# or strip the --load-extension= flag, delete the rendered manifest.
-# The RSA key is kept (removes with --purge-key if you really want it gone).
+# Uninstall Najm Downloader's browser side: remove the NativeMessagingHosts
+# manifests from every Chromium-family profile, strip --load-extension= from
+# the flags confs (preserving other tools' entries), remove the setup marker.
+# The extension id is pinned by the committed key in extension/manifest.json,
+# so there is nothing to purge.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXT_DIR="$ROOT/extension"
-KEY="$ROOT/host/najm-ytdlp-key.pem"
 MANIFEST_NAME="com.najm.ytdlp.json"
+STATE_DIR="$HOME/.local/state/najm-downloads"
+MARKER="$STATE_DIR/installed.json"
 
-PURGE_KEY=0
-[[ "${1:-}" == "--purge-key" ]] && PURGE_KEY=1
+NATIVE_DIRS=(
+  "$HOME/.config/chromium"
+  "$HOME/.config/google-chrome"
+  "$HOME/.config/google-chrome-beta"
+  "$HOME/.config/google-chrome-unstable"
+  "$HOME/.config/BraveSoftware/Brave-Browser"
+  "$HOME/.config/BraveSoftware/Brave-Browser-Beta"
+  "$HOME/.config/BraveSoftware/Brave-Browser-Nightly"
+  "$HOME/.config/BraveSoftware/Brave-Origin"
+  "$HOME/.config/microsoft-edge"
+  "$HOME/.config/microsoft-edge-dev"
+)
+FLAGS_CONFS=(
+  chromium
+  chrome
+  google-chrome
+  brave
+  brave-beta
+  brave-nightly
+  brave-origin
+  brave-origin-beta
+  microsoft-edge-stable
+)
 
 remove_native() {
-  local dir="$1"
-  local file="$dir/NativeMessagingHosts/$MANIFEST_NAME"
+  local file="$1/NativeMessagingHosts/$MANIFEST_NAME"
   if [[ -f "$file" ]]; then
     rm -f "$file"
     echo "removed $file"
   fi
 }
-remove_native "$HOME/.config/chromium"
-remove_native "$HOME/.config/BraveSoftware/Brave-Origin"
+for dir in "${NATIVE_DIRS[@]}"; do
+  remove_native "$dir"
+done
 
 strip_flags() {
   local file="$1"
   [[ -f "$file" ]] || return 0
-  # Always strip the flag in place — never restore the .najm-bak wholesale, or
-  # flags other tools added after install would be lost. The backup install.sh
-  # left behind stays on disk as a manual safety net.
+  # Always strip in place - never restore a .najm-bak wholesale, or flags other
+  # tools added after install would be lost. The backup install.sh left behind
+  # stays on disk as a manual safety net.
   if ! grep -qF -- "$EXT_DIR" "$file"; then
-    [[ -f "${file}.najm-bak" ]] && echo "no $EXT_DIR in $file (backup kept: ${file}.najm-bak)"
     return 0
   fi
   local esc
@@ -45,20 +68,17 @@ strip_flags() {
     "$file"
   sed -i '/^[[:space:]]*$/d' "$file"
   echo "stripped $EXT_DIR from $file"
-  if [[ -f "${file}.najm-bak" ]]; then
-    echo "  backup kept at ${file}.najm-bak"
-  fi
+  [[ -f "${file}.najm-bak" ]] && echo "  backup kept at ${file}.najm-bak"
 }
-strip_flags "$HOME/.config/chromium-flags.conf"
-strip_flags "$HOME/.config/brave-origin-flags.conf"
+for name in "${FLAGS_CONFS[@]}"; do
+  strip_flags "$HOME/.config/$name-flags.conf"
+done
 
-rm -f "$EXT_DIR/manifest.json"
-echo "removed rendered $EXT_DIR/manifest.json"
-
-if [[ "$PURGE_KEY" == 1 && -f "$KEY" ]]; then
-  rm -f "$KEY"
-  echo "removed $KEY (next install will generate a new extension id)"
+if [[ -f "$MARKER" ]]; then
+  rm -f "$MARKER"
+  echo "removed $MARKER"
 fi
 
 echo
-echo "Najm Downloader uninstalled. Restart the browser to unload the extension."
+echo "Najm Downloader uninstalled. Restart the browsers to unload the extension."
+echo "The extension id stays pinned to the committed key; re-install with ./install.sh"
