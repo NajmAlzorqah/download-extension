@@ -3,10 +3,11 @@
 This project incorporates or references the following third-party works. Each
 notice below is reproduced exactly as required by the corresponding license.
 
-## Omarchy (MIT License) — base of the `najm.osd` panel
+## Omarchy (MIT License) — base of the `Osd.qml` panel kind
 
-The `najm.osd` panel (`omarchy-plugins/najm.osd/`) is a derivative of the stock
-`omarchy.osd` plugin shipped by Omarchy. `Osd.qml` and `OsdModel.js` are derived
+The `Osd.qml` panel kind of this plugin (`najm.downloads`) is a derivative of
+the stock `omarchy.osd` plugin shipped by Omarchy. `Osd.qml` and `OsdModel.js`
+are derived
 from the Omarchy originals; the stacked title-over-bar download rendering, the
 readout column, and the click-to-dismiss behavior are additions on top of that
 base. The base work is reproduced under the following license:
@@ -33,7 +34,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-The `najm.osd` panel also imports the Quickshell and QtQuick module interfaces
+The `Osd.qml` panel also imports the Quickshell and QtQuick module interfaces
 (see "Quickshell" below); the `osd` integration that drives it lives in
 `host/najm-ytdlp-host`.
 
@@ -77,7 +78,7 @@ listed for transparency only.
   (public domain). Invoked via `host/najm-ytdlp-host` (`/usr/bin/yt-dlp`).
 - **ffmpeg** — LGPL/GPL depending on build; invoked separately, not bundled.
 - **Quickshell** — [LGPL-3.0](https://github.com/quickshell-io/quickshell).
-  The QML panels (`najm.osd`, `najm.downloads`) only *import* the public
+  The QML panels (`Osd.qml`, `Panel.qml`) only *import* the public
   QtQuick/Quickshell module interfaces; they do not incorporate LGPL code.
 - **Nerd Fonts** — glyphs used in the OSD/bar UI render from fonts installed on
   the system (MIT-licensed typeface); no font files are bundled.

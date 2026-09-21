@@ -41,15 +41,19 @@ code copied from other projects without compatible permissive terms.
 
 ## Gotchas to keep in mind
 
-- Never edit `extension/manifest.json` — it is generated from
-  `manifest.json.in` by `./install.sh`.
-- Never regenerate or commit `host/najm-ytdlp-key.pem`. The extension id is
-  derived from it; a new key breaks the native-host `allowed_origins` and the
-  key must stay private.
-- Keep `extension/background-*.js` filename bumps and the `manifest.json.in`
-  `background` field in sync (Chromium caches service workers).
-- The `najm.osd` panel is a *derivative* of Omarchy's MIT-licensed `omarchy.osd`;
-  preserve its provenance headers and keep the Omarchy copyright notice intact.
+- `extension/manifest.json` is **static and committed** — the SPKI `key` field
+  inside it pins the extension id. Never regenerate it or change the key: a new
+  key changes the id and breaks the native-host `allowed_origins`. There is no
+  private key anywhere; `install.sh` reads the id out of the committed file.
+- Keep `extension/background-*.js` filename bumps and the `background` field of
+  `extension/manifest.json` in sync (Chromium caches service workers).
+- The `Osd.qml` panel kind is a *derivative* of Omarchy's MIT-licensed
+  `omarchy.osd`; preserve its provenance headers and keep the Omarchy copyright
+  notice intact (see NOTICE.md).
+- Keep the `install.sh`/`uninstall.sh` flag-merge logic and the widget's
+  "installed" marker contract in sync — and remember `omarchy plugin add`
+  **git-clones** the repo, so plugin changes must be committed before they can
+  be installed from a remote.
 - Keep `extension/defaults.js`, `extension/theme.js`'s fallback reading, and the
   widget's `Formats.js`/`Defaults.js` in sync — duplicated logic drifts.
 - The host parser (`run_one`) and `build_command()` tagged lines

@@ -57,17 +57,27 @@ uninstall.sh reverses 1–5 (never touches other tools' flags).
 
 - [x] **P0 research** — Omarchy plugin contract, marketplace publish flow,
       plugin-add/validate internals, Quickshell Process/StdioCollector API.
-- [ ] **P1 repo restructure** — copy widget + OSD files to root, merged
+- [x] **P1 repo restructure** — copy widget + OSD files to root, merged
       `manifest.json`, commit extension manifest with baked key, drop pem/keygen.
-- [ ] **P2 installers** — rewrite `install.sh`/`uninstall.sh` for 10 profiles,
-      marker, deps; runnable from checkout and plugin dir.
-- [ ] **P3 widget setup UI** — `setupNeeded` state, install button, live log,
+- [x] **P2 installers** — rewrite `install.sh`/`uninstall.sh` for 10 profiles,
+      marker, deps; runnable from checkout and plugin dir. The flags merge
+      keeps other tools' entries and drops a previous Najm checkout path; a
+      bug that dropped the `--load-extension=` literal on re-merge was caught
+      by testing uninstall→reinstall on the live machine and fixed.
+- [x] **P3 widget setup UI** — `setupNeeded` state, install button, live log,
       marker watcher; bar stays visible until installed.
-- [ ] **P4 validation** — `omarchy plugin validate .`, `qmllint`, `py_compile`.
-- [ ] **P5 machine swap** — remove old `najm.downloads` + `najm.osd` plugin dirs,
-      `omarchy plugin add /path --enable`, run installer, browser restart.
-- [ ] **P6 docs + marketplace** — README/AGENTS/CONTRIBUTING/NOTICE updates,
-      preview.png, submit via `omacom/omarchy-plugin-marketplace` issue template.
+- [x] **P4 validation** — `omarchy plugin validate .`, `qmllint`, `py_compile`,
+      `bash -n` all pass; install/uninstall cycle verified end-to-end.
+- [x] **P5 machine swap** — old `najm.downloads` + `najm.osd` dirs replaced by
+      `omarchy plugin add` of this repo (files had to be committed first —
+      clone-based install ignores untracked files), the plugin's install.sh
+      transitioned the flags repo→plugin path, browsers restarted, host
+      round-trip verified.
+- [/] **P6 docs + marketplace** — README/AGENTS/CONTRIBUTING/NOTICE updated;
+      remaining: push to GitHub, then optionally submit via the
+      `omacom/omarchy-plugin-marketplace` issue template (no screenshot needed —
+      the template only wants the repo URL, category, ≤3 tags, install/remove
+      docs).
 
 ## Marketplace submission checklist
 

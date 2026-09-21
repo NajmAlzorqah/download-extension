@@ -6,7 +6,9 @@ without cookies or accounts. Companion to the Omarchy "Download Video"
 extension, but with a full popup UI that mirrors **exactly** what the video
 offers — plus an Omarchy bar-widget (`najm.downloads`) that shares the same
 download queue, so jobs survive popup/browser restarts and are manageable from
-either surface:
+either surface. The whole thing is an **Omarchy plugin**: `omarchy plugin add
+<url> --enable` installs it, and the widget's first click installs the browser
+extension + native host into every Chromium-family browser on the machine.
 
 - **quality**: one option per resolution actually offered by the video, from
   highest to lowest (nothing more — no codec names). The best codec for each
@@ -50,49 +52,78 @@ either surface:
 
 ## Layout
 
+The repository root is an Omarchy plugin; a git clone of it is a working plugin
+(`omarchy plugin add <git-url> --enable`) and a checkout of it works the same
+way:
+
 ```
-extension/          MV3 extension (manifest rendered by install.sh)
-  manifest.json.in  template — @@KEY@@ is replaced with your RSA public key
-  background-6.js   owns the native port (drops it when idle so the shim exits + the SW can suspend), routes probe/download/cancel/reorder/getQueue + the queue (filename versioned! see Troubleshooting)
-  popup.{html,css,js}  toolbar popup
-  options.{html,css,js} defaults (output dir, resolutions, subtitle defaults)
-  theme.{js,css}       live Omarchy theme → CSS vars on :root
-  controls.js          custom select/checkbox visuals (native elements stay the source of truth)
+manifest.json      Omarchy plugin manifest — bar-widget (najm.downloads) + the
+                   panel kind that renders the download OSD (IPC target
+                   najm.osd, so the native host is unchanged)
+Panel.qml          bar-widget: shared queue monitor + first-click setup pane
+                   (until install.sh writes its marker it installs the browser
+                   side and streams the output)
+Client.js Formats.js Defaults.js   widget JS (agent socket + popup ported logic)
+Osd.qml OsdModel.js  panel kind: the stacked title-over-bar progress OSD
+extension/         MV3 extension (static manifest.json; the committed SPKI key
+                   pins the extension id — no private key exists in the repo)
+  background-6.js   owns the native port, routes probe/download/cancel/reorder/getQueue
+   popup/options/theme/controls  popup UI, defaults, live theme → CSS vars
 host/
-  najm-ytdlp-host   Python native-messaging host — two modes: the default shim
-                    relays the browser's 4-byte framed stdio to a JSON-lines
-                    unix-socket daemon (`--agent`) that owns the shared queue
-  com.najm.ytdlp.json.tpl  host manifest template
-  najm-ytdlp-key.pem  generated RSA key (stable extension id) — keep private
-tools/make-icons.py icon generator (regenerate: `uv run --directory tools python make-icons.py`)
-~/.config/omarchy/plugins/najm.downloads/  Omarchy bar-widget, a second client of the same
-     agent socket — the popup's probe/download/progress/queue UI, sharing the queue
-install.sh / uninstall.sh
+  najm-ytdlp-host            Python native-messaging host — shim ↔ JSON-lines
+                             unix-socket agent (owns the shared queue)
+  com.najm.ytdlp.json.tpl    host manifest template (@@HOST_PATH@@/@@EXT_ORIGIN@@)
+install.sh / uninstall.sh  browser-side installer/uninstaller (10 Chromium-family
+                             profiles; run by the widget's first click or by hand)
+tools/make-icons.py       icon generator (`uv run --directory tools python make-icons.py`)
+tools/perf-check.sh       samples agent/shim RSS+CPU, or counts OSD spawns
 ```
+
+The bar-widget is a **second client of the same agent socket** the host shim
+talks to, so a download started in the popup renders in the widget live and
+vice-versa (the queue is owned by the agent daemon, which outlives every
+browser session).
 
 ## Install
 
-Requires `yt-dlp` (in `PATH` or at `/usr/bin/yt-dlp`), `ffmpeg`, `openssl`, `python3`.
+`omarchy plugin add` runs no plugin scripts, so installation is two steps:
+
+```bash
+omarchy plugin add https://github.com/NajmAlzorqah/download-extension.git --enable
+# then: click the Najm Downloader widget in the bar (it installs the browser side)
+```
+
+The widget's first click runs `install.sh` (streaming its output) and flips to
+the queue monitor when done. You can also run it by hand from a checkout:
 
 ```bash
 ./install.sh
 ```
 
-What it does:
+Requires `yt-dlp` and `ffmpeg` at `/usr/bin` (the host hardcodes those paths;
+best-effort `omarchy-pkg-add` is attempted otherwise), plus `python3`,
+`sha256sum`, `base64`. What `install.sh` does:
 
-1. Generates `host/najm-ytdlp-key.pem` once and renders `extension/manifest.json`
-   with the matching SPKI public key. The extension id
-   (`sha256(spki)` → first 16 bytes hex-mapped `0-f → a-p`) is derived from the
-   same key, so the id is stable and the host's `allowed_origins` is always correct.
-2. Registers `com.najm.ytdlp.json` in:
-   - `~/.config/chromium/NativeMessagingHosts/`
-   - `~/.config/BraveSoftware/Brave-Origin/NativeMessagingHosts/`
-3. Appends the extension dir to the existing `--load-extension=` line in
-   `~/.config/chromium-flags.conf` and `~/.config/brave-origin-flags.conf`
-   (`.najm-bak` backup; idempotent).
+1. Derives the extension id from the **committed SPKI key** in
+   `extension/manifest.json` (`sha256(spki)` → first 16 bytes hex-mapped
+   `0-f → a-p`). No private key exists — a new key would change the id and
+   break `allowed_origins`, so the key is checked in and never regenerated.
+2. Registers the `com.najm.ytdlp.json` native host in **all ten**
+   Chromium-family profile roots:
+   `chromium`, `google-chrome[-beta|-unstable]`,
+   `BraveSoftware/Brave-Browser[-Beta|-Nightly|/Brave-Origin]`,
+   `microsoft-edge[-dev]`.
+3. Adds the extension dir to `--load-extension=` in every `*-flags.conf`
+   (omitting browsers without a conf except the core `chromium` + `brave-origin`, for which
+   the conf is created). Idempotent, keeps other tools' entries on the line,
+   and drops a previously-configured Najm checkout path so the line never
+   carries two. A `.najm-bak` backup is taken on first edit.
+4. Writes the marker `~/.local/state/najm-downloads/installed.json`
+   (the widget's "setup needed" flip), with the active extension dir/id, host
+   binary, the configured profiles and yt-dlp/ffmpeg availability.
 
-Then **restart the browser**. The extension loads with the other Omarchy
-extensions; click the icon in the toolbar.
+Then **restart the browser** (fully quit). The extension loads with the other
+Omarchy extensions; click the icon in the toolbar.
 
 ## Use
 
@@ -192,9 +223,9 @@ to the client that started the job, while `queue` snapshots and coarse
 Progress drives the Quickshell OSD exclusively — no notification is sent while
 a download runs (the old per-second "Downloading" toast spammed the
 notification center via its history log). The OSD is rendered **stacked**
-(video name over a progress bar, bottom-center) by a user clone of
-`omarchy.osd` at `~/.config/omarchy/plugins/najm.osd/`; stock Omarchy only
-draws a bar *or* a message. Completion/failure toasts use
+(video name over a progress bar, bottom-center) by the `panel` kind of this
+same plugin (`Osd.qml`, IPC target `najm.osd`) — stock Omarchy only draws a bar
+*or* a message. Completion/failure toasts use
 `omarchy-notification-send` with thumbnail + mpv action; `notify-send` is the
 fallback when Omarchy isn't present.
 
@@ -230,13 +261,15 @@ whitelist-validated.
 ## Uninstall
 
 ```bash
-./uninstall.sh            # removes host manifests + flags, keeps the RSA key
-./uninstall.sh --purge-key  # also delete the key (new extension id on reinstall)
+./uninstall.sh
 ```
 
-Uninstall strips the extension in place from the `--load-extension=` list, so
-flags other tools added after install are preserved; the `.najm-bak` backup is
-left on disk as a manual safety net.
+Removes the host manifests and icon registration from all ten profiles, strips
+the extension from `--load-extension=` (preserving other tools' entries; `.najm-bak`
+stays as a manual safety net), and deletes the marker. The extension id is
+pinned by the committed key, so there is nothing to purge — re-install with
+`./install.sh`. To remove the Omarchy plugin itself:
+`omarchy plugin remove najm.downloads --yes`.
 
 ## Contributing
 
@@ -248,8 +281,8 @@ Origin) so contributions are cleanly licensed inbound = outbound. See
 ## Credits
 
 - The **Omarchy** desktop shell and its `omarchy.osd` panel (MIT,
-  © David Heinemeier Hansson) — the `najm.osd` OSD clone is a derivative of the
-  stock panel; see [NOTICE.md](NOTICE.md).
+  © David Heinemeier Hansson) — the `Osd.qml` panel kind in this repo is a
+  derivative of the stock panel; see [NOTICE.md](NOTICE.md).
 - **yt-dlp** (Unlicense) does the actual downloading; **ffmpeg** handles
   merging; **Quickshell** (LGPL-3.0) is the QML runtime the panels run on.
 - Agent skills vendored under `.agents/skills/` from
