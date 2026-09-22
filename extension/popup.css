@@ -112,6 +112,16 @@ body {
   border-top: 1px solid var(--ctrl-normal-border);
 }
 .progress-row { display: flex; align-items: center; gap: var(--sp-10); }
+/* The downloading video's title, directly above its bar: one line, elided, with
+   the full text in the tooltip (the popup is narrow and titles run long). */
+.progress-title {
+  margin-bottom: var(--sp-8);
+  font-size: var(--font-body-small);
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .bar {
   flex: 1;
   height: var(--bar-h);

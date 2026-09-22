@@ -90,6 +90,10 @@
       <button id="downloadBtn" class="btn primary" disabled>Download</button>
 
       <div id="progress" class="progress" hidden>
+        <!-- Which video the bar below belongs to (host-echoed selection.title):
+             without it a queue that promotes the next job shows a bar with no
+             way to tell whose progress it is. -->
+        <div id="progressTitle" class="progress-title" hidden></div>
         <div class="progress-row">
           <div class="bar"><div id="barFill"></div></div>
           <div id="pct" class="mono pct"></div>

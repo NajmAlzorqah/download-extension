@@ -322,9 +322,12 @@ exit path calls `osd_close()`. Clicking the card hides it: the clone sets a
 up, re-arming only once those refreshes stop (or when the host's `osd_close()`
 resets it), while volume/brightness/media OSDs are never suppressed. The card
 is the only interactive part of the surface (`mask: Region` covers just it),
-so the desktop stays clickable. The video name travels as `selection.title`
-(probe `meta.title`, playlist `meta.sample`) from `popup.js` → host — **not** a
-new `NJDP:` tag, so it adds no parser coupling.
+so the desktop stays clickable. The video name travels as
+`selection.title` (probe `meta.title`, playlist `meta.sample`) from `popup.js` → host — **not** a
+new `NJDP:` tag, so it adds no parser coupling. The popup's own progress bar
+labels itself from that same host-echoed field (queue head → `selection.title`),
+falling back to the probe's `meta.title` only while the URL field still holds
+that video, so a promoted or widget-started job never renders an unlabeled bar.
 
 ## Popup reopen behavior
 

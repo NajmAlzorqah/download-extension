@@ -583,6 +583,29 @@ function setProgress(p) {
   el("pct").textContent = p != null ? Math.round(p) + "%" : "";
 }
 
+// Title of the job the bar describes. Every queue item carries the host's
+// sanitized `selection.title`, so the queue head names the active video even
+// when this popup didn't start it (a widget-started job, or one adopted after
+// an extension reload). The probe's own title only covers the beat between
+// clicking Download and the first queue broadcast — and only for the URL still
+// in the field, so a probe of a *different* video can't mislabel the bar.
+function activeJobTitle(snapshot) {
+  const head = (snapshot.queue || [])[0];
+  if (!head) return "";
+  const echoed = head.selection && head.selection.title;
+  if (echoed) return echoed;
+  if (probeData && probeData.meta && head.url === url) return probeData.meta.title || "";
+  return "";
+}
+
+function setProgressTitle(title) {
+  const node = el("progressTitle");
+  const text = String(title || "").trim();
+  node.hidden = text === "";
+  node.textContent = text;
+  node.title = text;
+}
+
 function setWarn(msg) {
   el("warn").hidden = !msg;
   el("warn").textContent = msg || "";
@@ -707,6 +730,7 @@ function onHostEvent(snapshot) {
   if (snapshot.status === "downloading") {
     el("opts").hidden = false;
     el("progress").hidden = false;
+    setProgressTitle(activeJobTitle(snapshot));
     el("downloadBtn").hidden = false;
     el("downloadBtn").disabled = false;
     setJobControls(true);
@@ -724,6 +748,7 @@ function onHostEvent(snapshot) {
     el("msg").textContent = snapshot.message || (pausedNow ? "Paused" : "");
   } else if (snapshot.status === "done") {
     el("progress").hidden = true;
+    setProgressTitle("");
     el("dlSize").textContent = "";
     el("downloadBtn").hidden = false;
     el("downloadBtn").disabled = false;
@@ -743,6 +768,7 @@ function onHostEvent(snapshot) {
     }
   } else if (snapshot.status === "error") {
     el("progress").hidden = true;
+    setProgressTitle("");
     el("dlSize").textContent = "";
     el("downloadBtn").hidden = false;
     el("downloadBtn").disabled = false;
@@ -751,6 +777,7 @@ function onHostEvent(snapshot) {
     setWarn(null);
     el("msg").textContent = "Error: " + (snapshot.message || "unknown");
   } else {
+    setProgressTitle("");
     setJobControls(false);
     pausedNow = false;
   }
