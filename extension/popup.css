@@ -94,9 +94,17 @@ body {
 .save-to .mono { max-width: 60%; text-align: right; color: var(--fg-dim); }
 
 #downloadBtn { width: 100%; margin-top: var(--sp-16); height: 38px; }
-.actions-row { display: flex; gap: var(--sp-8); margin-top: var(--sp-8); }
+.actions-row { display: flex; gap: var(--sp-8); margin-top: var(--sp-10); }
 .actions-row .btn { flex: 1; }
 .actions-row .btn:empty { display: none; }
+
+/* `hidden` alone cannot hide an element whose author rule sets `display`
+   (author rules beat the UA's `[hidden]` rule) — same idiom as
+   .om-select-menu:not([hidden]). Without this the subtitles block stayed
+   visible with "Download subtitles" unticked, and the Pause/Cancel row
+   lingered after the active job left the queue. */
+.subs-options[hidden],
+.actions-row[hidden] { display: none; }
 
 .progress {
   margin-top: var(--sp-16);

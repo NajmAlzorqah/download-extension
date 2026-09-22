@@ -30,6 +30,23 @@ input[type="text"] { width: 100%; }
 .om-check { margin: var(--sp-10) 0; }
 .om-check + .om-check { margin-top: var(--sp-6); }
 
+/* Subtitles block, mirroring the popup's .subs-options: an author `display`
+   rule beats the UA's `[hidden]`, so the hide has to be re-asserted or the
+   block stays visible with "Download subtitles" unticked. */
+.subs-options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-10);
+  margin-top: var(--sp-10);
+  padding: var(--sp-10) var(--sp-12);
+  background: var(--ctrl-normal-fill);
+  border-left: 2px solid var(--accent-border);
+  border-radius: 0 calc(var(--radius) - 1px) calc(var(--radius) - 1px) 0;
+}
+.subs-options[hidden] { display: none; }
+.subs-options .om-check,
+.subs-options .sub-field { margin: 0; }
+
 .options-footer {
   display: flex;
   flex-direction: column;

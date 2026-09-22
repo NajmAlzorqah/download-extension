@@ -47,17 +47,18 @@
 
       <div class="field-block">
         <label class="check"><input type="checkbox" id="subsOn"> Download subtitles by default</label>
-        <label class="check sub"><input type="checkbox" id="auto"> Include auto-generated captions</label>
-      </div>
-
-      <div class="field-block">
-        <label class="field-label" for="langs">Default languages (comma-separated, e.g. en,ar)</label>
-        <input type="text" id="langs" placeholder="en">
-      </div>
-
-      <div class="field-block">
-        <label class="check"><input type="checkbox" id="convertSrt"> Convert subtitles to SRT</label>
-        <label class="check"><input type="checkbox" id="embed"> Embed subtitles into the video file</label>
+        <!-- Gated on the toggle above: with subtitles off there is nothing to
+             auto-generate, convert or embed, so the whole block stays hidden
+             (options.js's updateSubsVisibility keeps this in sync). -->
+        <div id="subsOpts" class="subs-options" hidden>
+          <label class="check sub"><input type="checkbox" id="auto"> Include auto-generated captions</label>
+          <div class="sub-field">
+            <label class="field-label" for="langs">Default languages (comma-separated, e.g. en,ar)</label>
+            <input type="text" id="langs" placeholder="en">
+          </div>
+          <label class="check"><input type="checkbox" id="convertSrt"> Convert subtitles to SRT</label>
+          <label class="check"><input type="checkbox" id="embed"> Embed subtitles into the video file</label>
+        </div>
       </div>
     </section>
 

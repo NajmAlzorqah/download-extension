@@ -366,11 +366,8 @@ function renderLangs() {
   el("langs").disabled = noSubs;
   el("subHint").hidden = !noSubs;
   el("subHint").textContent = noSubs ? "No subtitles are offered by this video" : "";
-  if (noSubs) {
-    el("subsOpts").style.display = "none";
-    return;
-  }
-  el("subsOpts").style.display = "";
+  updateSubsVisibility();
+  if (noSubs) return;
 
   const isPlaylist = !!(probeData.meta && probeData.meta.is_playlist);
   const langOk = prefs.langs && (prefs.langs === "all" || entries.has(prefs.langs));
@@ -423,6 +420,32 @@ function renderLangs() {
 
   sel.value = [...sel.options].some((o) => o.value === prefs.langs) ? prefs.langs : "all";
   renderSubFormats();
+}
+
+// Single owner of the subtitles block's visibility. It's gated on two things:
+// the "Download subtitles" toggle being ticked, and the probed video actually
+// offering a track (renderLangs() keeps #subsOn.disabled in sync with that, and
+// leaves it false until a probe has landed). Both the toggle handler and
+// renderLangs() come through here so the two conditions can't fight over
+// `style.display` — and `hidden` only works because popup.css re-asserts the
+// hide for `.subs-options[hidden]` (its author `display: flex` would otherwise
+// beat the UA's `[hidden]` rule).
+function updateSubsVisibility() {
+  const offered = !!probeData && !el("subsOn").disabled;
+  el("subsOpts").hidden = !el("subsOn").checked || !offered;
+}
+
+// The playlist control only exists for playlist links: a plain video URL has no
+// playlist to download, so the box is hidden outright rather than left sitting
+// there unchecked (buildSelection() then refuses to ship `playlist:true` for it,
+// and no stray "Playlist" tag reaches a queue row). `prefs.playlist` stays the
+// saved default — it seeds the box on the next playlist probe.
+function updatePlaylistControl() {
+  const isPlaylist = !!(probeData && probeData.meta && probeData.meta.is_playlist);
+  el("playlistWrap").hidden = !isPlaylist;
+  if (!isPlaylist) return;
+  if (!playlistTouched) el("playlist").checked = true;
+  prefs.playlist = el("playlist").checked;
 }
 
 const CHAPTER_CONTAINERS = ["mp4", "webm", "mkv"];
@@ -483,15 +506,7 @@ function renderProbe(r, sourceUrl) {
     `<b>${escapeHtml(meta.title || "Untitled")}</b>` +
     (tag.length ? `<span class="tag">${tag.map(escapeHtml).join(" · ")}</span>` : "");
 
-  if (meta.is_playlist) {
-    if (!playlistTouched) {
-      el("playlist").checked = true;
-      prefs.playlist = true;
-    }
-  } else if (!playlistTouched) {
-    el("playlist").checked = false;
-    prefs.playlist = false;
-  }
+  updatePlaylistControl();
 
   renderFormats();
   updateChaptersControl();
@@ -544,7 +559,7 @@ function buildSelection() {
     formatHasAudio: !!fmt.formatHasAudio,
     formatExt: fmt.formatExt,
     resolution: fmt.resolution,
-    playlist: prefs.playlist,
+    playlist: !el("playlistWrap").hidden && el("playlist").checked,
     chapters: (!el("chaptersWrap").hidden && !el("chapters").disabled) ? prefs.chapters : "off",
     subs: {
       on: prefs.subsOn && !el("subsOn").disabled,
@@ -678,15 +693,24 @@ function renderQueue(queue) {
   });
 }
 
+// The Pause/Resume + Cancel row is bound to the *active job*: it appears with
+// the progress bar and disappears with it, so a job that ended (done / error /
+// cancelled, including one the queue snapshot reports as gone — a widget-side
+// cancel) can't leave a stray Cancel button floating with no bar to explain it.
+function setJobControls(active) {
+  el("actionsRow").hidden = !active;
+  el("pauseBtn").hidden = !active;
+  el("cancelBtn").hidden = !active;
+}
+
 function onHostEvent(snapshot) {
   if (snapshot.status === "downloading") {
     el("opts").hidden = false;
     el("progress").hidden = false;
     el("downloadBtn").hidden = false;
     el("downloadBtn").disabled = false;
-    el("cancelBtn").hidden = false;
+    setJobControls(true);
     pausedNow = !!snapshot.paused;
-    el("pauseBtn").hidden = false;
     el("pauseBtn").textContent = pausedNow ? "Resume" : "Pause";
     setProgress(snapshot.pct ?? 0);
     const d = snapshot.downloaded, t = snapshot.total;
@@ -703,8 +727,7 @@ function onHostEvent(snapshot) {
     el("dlSize").textContent = "";
     el("downloadBtn").hidden = false;
     el("downloadBtn").disabled = false;
-    el("cancelBtn").hidden = true;
-    el("pauseBtn").hidden = true;
+    setJobControls(false);
     pausedNow = false;
     if (snapshot.message === "Cancelled") {
       setWarn(null);
@@ -723,13 +746,12 @@ function onHostEvent(snapshot) {
     el("dlSize").textContent = "";
     el("downloadBtn").hidden = false;
     el("downloadBtn").disabled = false;
-    el("cancelBtn").hidden = true;
-    el("pauseBtn").hidden = true;
+    setJobControls(false);
     pausedNow = false;
     setWarn(null);
     el("msg").textContent = "Error: " + (snapshot.message || "unknown");
   } else {
-    el("pauseBtn").hidden = true;
+    setJobControls(false);
     pausedNow = false;
   }
   renderQueue(snapshot.queue || []);
@@ -769,7 +791,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   playlistTouched = !!prefs.playlist;
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  el("subsOpts").hidden = !prefs.subsOn;
+  updateSubsVisibility();
   el("opts").hidden = true;
   if (tab && tab.url && tab.url.startsWith("http")) {
     el("url").value = tab.url;
@@ -834,8 +856,8 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 });
 
-el("subsOn").addEventListener("change", (e) => {
-  el("subsOpts").hidden = !e.target.checked;
+el("subsOn").addEventListener("change", () => {
+  updateSubsVisibility();
   savePrefs();
 });
 el("autoSubs").addEventListener("change", () => {

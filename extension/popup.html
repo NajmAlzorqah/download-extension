@@ -65,7 +65,10 @@
         </div>
       </div>
 
-      <div class="field-block">
+      <!-- Playlist-only: a plain video URL has no playlist to download, so
+           renderProbe()/updatePlaylistControl() unhides this wrapper only when
+           the probe says the link is a playlist. -->
+      <div id="playlistWrap" class="field-block" hidden>
         <label class="check"><input type="checkbox" id="playlist"> Download entire playlist</label>
       </div>
 
@@ -85,10 +88,6 @@
       </div>
 
       <button id="downloadBtn" class="btn primary" disabled>Download</button>
-      <div class="actions-row">
-        <button id="pauseBtn" class="btn" hidden>Pause</button>
-        <button id="cancelBtn" class="btn danger" hidden>Cancel</button>
-      </div>
 
       <div id="progress" class="progress" hidden>
         <div class="progress-row">
@@ -99,6 +98,14 @@
           <div id="dlSize"></div>
           <div id="speed"></div>
         </div>
+      </div>
+
+      <!-- Pause/Resume + Cancel act on the job in the bar directly above, so
+           they sit *under* it: the Download button stays at the top because it
+           starts a new job (queues one while this one runs). -->
+      <div id="actionsRow" class="actions-row" hidden>
+        <button id="pauseBtn" class="btn" hidden>Pause</button>
+        <button id="cancelBtn" class="btn danger" hidden>Cancel</button>
       </div>
       <div id="msg" class="status-line"></div>
       <div id="warn" class="warn" hidden></div>
