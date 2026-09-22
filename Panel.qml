@@ -19,7 +19,7 @@ import "Formats.js" as Formats
 // First-run: `omarchy plugin add` installs this repo but never runs plugin
 // code, so until the bundled install.sh has written its marker the widget
 // doubles as the setup pane (install.sh also lives at the repo root and is
-// runnable by hand). See plan.md.
+// runnable by hand).
 Panel {
   id: root
   moduleName: "najm.downloads"
