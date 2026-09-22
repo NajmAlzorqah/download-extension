@@ -374,15 +374,15 @@ the plugin. The removal/update contract keeps a reinstall **guaranteed fresh**:
   copy. It therefore runs identically from the clone, a checkout, or the state
   copy (which is what survives the plugin's removal). Downloads are untouched.
 - **Update self-heal.** `Panel.qml` compares the clone's `HEAD` against
-  `served_git`: marker from a different checkout → a "Update to this plugin's
-  version" button (never auto — the dev loop stays untouched); marker from this
-  clone and the clone updated → install.sh re-runs automatically on shell load
-  (idempotent; the marker's `served_git` then matches). Requires a shell
-  restart to pick up a newer Panel.qml (see Gotchas).
-- **In-widget uninstall.** The popup's Manage footer runs the state-dir
-  `uninstall.sh`, then `omarchy plugin remove najm.downloads --yes` (the widget
-  is unloaded by the rescan — that is the point). `tools/omarchy-remove.sh` is
-  the same teardown from the console.
+  `served_git`: when the marker came from this clone and the clone moved on,
+  install.sh re-runs automatically on shell load (idempotent; the marker's
+  `served_git` then matches). A marker from a different checkout is never
+  re-pointed automatically. Requires a shell restart to pick up a newer
+  Panel.qml (see Gotchas).
+- **No in-widget uninstall.** The panel's manage footer (re-run install /
+  uninstall buttons) was removed; teardown is only the console path —
+  `./uninstall.sh` (browser side + runtime) or `tools/omarchy-remove.sh`
+  (the same, plus the plugin itself).
 
 ## Widget (`najm.downloads`)
 
@@ -398,7 +398,7 @@ of `background-6.js` — it talks JSON-lines to the agent directly, with no
 | File | Role |
 |---|---|
 | `manifest.json` | Omarchy plugin manifest (id `najm.downloads`, kinds `bar-widget` + `panel`) |
-| `Panel.qml` | shared-queue monitor + first-click setup pane (installs the browser side until the marker exists): progress view, cancel/pause/resume the active job, queue reorder/remove, connection state, and a Manage footer (update self-heal, "Update to this plugin's version", in-widget uninstall — see Removal & update model). Only file with QML; hot-reloaded by the shell watcher, reliable pickup via `omarchy restart shell` |
+| `Panel.qml` | shared-queue monitor + first-click setup pane (installs the browser side until the marker exists): progress view, cancel/pause/resume the active job, queue reorder/remove, connection state, and the update self-heal (see Removal & update model). Only file with QML; hot-reloaded by the shell watcher, reliable pickup via `omarchy restart shell` |
 | `Client.js` | JSON-lines frame builders + reply classifiers mirroring the agent contract (keep in sync with the host's `AGENT_SOCK_*` / dispatch) |
 | `Formats.js` | probe-option helpers ported from `extension/popup.js` (see Parser coupling — `summarizeSelection`/labels must track popup.js) |
 | `Defaults.js` | mirrors `extension/defaults.js` — a **second copy** and the known defaults-drift surface (kept for the node unit harness, which loads it for `DEFAULTS`; the widget itself no longer builds selections) |

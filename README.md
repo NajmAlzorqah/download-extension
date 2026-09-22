@@ -168,7 +168,7 @@ palette to the popup as CSS variables.
 | Panel | Cancel | Kill the active download and advance the queue |
 | Panel | Pause / Resume | Pause or resume the active download |
 | Queue rows | ↑ / ↓ / ✕ | Move a waiting item earlier, later, or remove it |
-| Manage footer | Install / Uninstall | Run `install.sh`, or tear the browser side down |
+| Setup pane | Install | First run only: run `install.sh` (browser side) |
 
 ## What it runs, exactly
 

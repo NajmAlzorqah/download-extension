@@ -87,9 +87,7 @@ Panel {
 
   // Marker journal (install.sh records where the browser side is served from
   // and at which commit) + the installed clone's resolved HEAD: together they
-  // drive the update self-heal (clone updated -> auto re-run install.sh) and
-  // the dev-case "Update to this plugin's version" button (installed_from
-  // points at another checkout -> never auto re-point, offer a button).
+  // drive the update self-heal (clone updated -> auto re-run install.sh).
   property string installedFrom: ""
   property string servedGit: ""
   property string cloneHead: ""
@@ -99,36 +97,9 @@ Panel {
 
   readonly property bool managedByPlugin:
     root.installed && root.installedFrom !== "" && root.installedFrom === root.pluginDir
-  readonly property bool updateAvailable:
-    root.installed && root.installedFrom !== "" && root.installedFrom !== root.pluginDir
   readonly property bool headStale:
     root.managedByPlugin && root.servedGit !== "" && root.cloneHead !== "" &&
     root.servedGit !== root.cloneHead
-
-  // Uninstall action state (armed-run two-step) + its output log.
-  property bool uninstallArmed: false
-  property bool manageRunning: false
-  property string manageLog: ""
-  property bool hasStateUninstall: false
-  readonly property string uninstallScript: root.hasStateUninstall
-    ? root.homeDir + "/.local/state/najm-downloads/uninstall.sh"
-    : root.setupScript.replace(/install\.sh$/, "uninstall.sh")
-
-  function appendManageLog(line) {
-    var s = String(line || "").replace(/\s+$/, "")
-    if (s === "") return
-    root.manageLog += s + "\n"
-  }
-
-  function armUninstall() {
-    root.uninstallArmed = !root.uninstallArmed
-  }
-
-  function runUninstall() {
-    root.manageLog = ""
-    root.manageRunning = true
-    uninstallProcess.running = true
-  }
 
   function probeCloneHead() {
     headProcess.running = false
@@ -138,8 +109,8 @@ Panel {
   // Update self-heal: when the installed clone is what the browsers are served
   // from and its HEAD moved past what the marker recorded, re-run install.sh so
   // the browsers are re-pointed at the released popup on the next restart.
-  // Never fires for the dev-checkout case (updateAvailable) — that needs the
-  // explicit button — and never when git/the marker can't be read.
+  // Never fires for a marker from another checkout, and never when git/the
+  // marker can't be read.
   function maybeAutoHeal() {
     if (root.healAttempted) return
     if (!root.markerKnown || !root.headChecked) return
@@ -227,16 +198,6 @@ Panel {
     }
   }
 
-  // Whether install.sh has placed its self-contained uninstall copy in the
-  // state dir (it exists for every marker written by the current install.sh).
-  FileView {
-    id: stateUninstallView
-    path: root.homeDir + "/.local/state/najm-downloads/uninstall.sh"
-    printErrors: false
-    onLoaded: root.hasStateUninstall = true
-    onLoadFailed: root.hasStateUninstall = false
-  }
-
   // Resolved HEAD of the installed clone (best-effort; unknown when the clone
   // isn't a git checkout). Feeds the update self-heal; also read the marker's
   // journal on the same async path so a race can't skip the check.
@@ -251,32 +212,6 @@ Panel {
       if (exitCode !== 0) root.cloneHead = ""
       root.headChecked = true
       root.maybeAutoHeal()
-    }
-  }
-
-  // Uninstall action: runs the marker-driven uninstall.sh (state copy first,
-  // plugin copy as fallback), then removes the plugin itself — the widget's own
-  // host, so `omarchy plugin remove` unloads this pane (that is the point).
-  Process {
-    id: uninstallProcess
-    running: false
-    command: [root.uninstallScript]
-    stdout: SplitParser {
-      onRead: function(line) { root.appendManageLog(String(line)) }
-    }
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.appendManageLog(String(text || ""))
-    }
-    onExited: function(exitCode) {
-      root.manageRunning = false
-      root.uninstallArmed = false
-      if (exitCode === 0) {
-        Quickshell.execDetached(["omarchy", "plugin", "remove", "najm.downloads", "--yes"])
-        root.close()
-      } else {
-        root.appendManageLog("uninstall failed (exit " + exitCode + ") — leaving the plugin in place")
-      }
     }
   }
 
@@ -1179,96 +1114,6 @@ Panel {
           visible: root.jobMessage !== ""
           text: root.jobMessage
           color: root.jobLevel === "error" ? Color.urgent : Color.popups.text
-        }
-      }
-
-      // --- manage footer (installed: re-point / re-run / uninstall) ------
-      // Reachable whenever the popup is open (the widget collapses to zero
-      // width when idle, so that's during setup or an active download); the
-      // manual path is tools/omarchy-remove.sh in the repo.
-      Column {
-        width: parent.width
-        spacing: Style.spacing.xs
-        visible: root.installed && !root.setupNeeded
-
-        Item { width: parent.width; implicitHeight: Style.space(2) }
-        Rectangle {
-          width: parent.width
-          height: 1
-          color: Qt.darker(Color.popups.text, 2.2)
-        }
-        Item { width: parent.width; implicitHeight: Style.space(2) }
-
-        Text {
-          width: parent.width
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          font.bold: true
-          textFormat: Text.PlainText
-          text: "Manage"
-          color: Qt.darker(Color.popups.text, 1.5)
-        }
-
-        // Dev-checkout install: the browsers are served from another checkout,
-        // so never auto re-point — offer an explicit switch to this plugin's
-        // released version (runs this clone's install.sh).
-        Button {
-          width: parent.width
-          visible: root.updateAvailable && !root.manageRunning
-          text: "Update to this plugin's version"
-          foreground: Color.popups.text
-          fontFamily: Style.font.family
-          bordered: true
-          tooltipText: "Re-point the browsers at this plugin's extension (" + root.pluginDir + ")"
-          onClicked: root.startSetup()
-        }
-
-        Button {
-          width: parent.width
-          visible: !root.updateAvailable && !root.manageRunning
-          text: "Re-run install"
-          foreground: Color.popups.text
-          fontFamily: Style.font.family
-          bordered: true
-          tooltipText: "Runs: " + root.setupScript
-          onClicked: root.startSetup()
-        }
-
-        Button {
-          width: parent.width
-          text: root.uninstallArmed ? "Confirm uninstall?" : "Uninstall plugin…"
-          foreground: root.uninstallArmed ? Color.urgent : Qt.darker(Color.popups.text, 1.5)
-          fontFamily: Style.font.family
-          bordered: true
-          enabled: !root.manageRunning
-          tooltipText: root.uninstallArmed
-            ? "Removes the browser extension + host, then this plugin"
-            : "Remove the browser side and this plugin (downloads stay)"
-          onClicked: root.uninstallArmed ? root.runUninstall() : root.armUninstall()
-        }
-
-        Text {
-          width: parent.width
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          textFormat: Text.PlainText
-          wrapMode: Text.Wrap
-          visible: root.uninstallArmed && !root.manageRunning
-          text: "Removes the extension from the installed browsers, stops the yt-dlp " +
-                "agent, then removes the plugin — the widget disappears when done. " +
-                "Downloads stay untouched."
-          color: Qt.darker(Color.popups.text, 1.5)
-        }
-
-        Text {
-          width: parent.width
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          textFormat: Text.PlainText
-          wrapMode: Text.Wrap
-          visible: root.manageLog !== ""
-          text: root.manageLog
-          color: root.manageRunning ? Qt.darker(Color.popups.text, 1.5) : Color.urgent
         }
       }
     }
