@@ -1,13 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Najm Downloader",
+  "name": "Video Downloader Ultra",
   "version": "0.1.0",
   "description": "Download videos via a local yt-dlp host. Pick resolution/container, grab subtitles (incl. auto-generated), download playlists.",
   "minimum_chrome_version": "116",
   "permissions": ["nativeMessaging", "activeTab", "storage", "tabs"],
-  "background": { "service_worker": "background-6.js" },
+  "background": { "service_worker": "background-7.js" },
   "action": {
-    "default_title": "Najm Downloader",
+    "default_title": "Video Downloader Ultra",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",

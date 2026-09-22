@@ -16,4 +16,4 @@ plan.md
 skills-lock.json
 
 # The Omarchy plugin's rendered state lives outside the tree (the installer
-# writes ~/.local/state/najm-downloads/installed.json, never into this repo).
+# writes ~/.local/state/najmalzorqah.video-downloader-ultra/installed.json, never into this repo).

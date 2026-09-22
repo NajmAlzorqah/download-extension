@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# perf-check.sh — measure RSS + CPU of the Najm Downloader processes (and the
+# perf-check.sh — measure RSS + CPU of the Video Downloader Ultra processes (and the
 # Omarchy shell hosting its widgets) so each perf fix can be verified with real
 # before/after numbers (per the performance-optimization skill's
 # measure → fix → re-measure → keep-or-revert rule).
@@ -9,7 +9,7 @@
 # Usage:
 #   tools/perf-check.sh                 # 30s window: RSS + CPU% for agent, shims, quickshell
 #   tools/perf-check.sh --seconds 15    # custom window length
-#   tools/perf-check.sh --spawns 60     # count omarchy-shell najm.osd "show" spawns/s over 60s
+#   tools/perf-check.sh --spawns 60     # count omarchy-shell najmalzorqah.video-downloader-ultra.osd "show" spawns/s over 60s
 #
 # Exit code: 0 even on empty matches (it's a reporter, not a gate).
 
@@ -34,8 +34,8 @@ snapshot_tid() {
   printf '%s %s %s\n' "${utime:-0}" "${stime:-0}" "${comm:-?}"
 }
 
-agents()   { pgrep -f 'najm-ytdlp-host --agent' 2>/dev/null; }
-shims()    { pgrep -f 'najm-ytdlp-host chrome-extension' 2>/dev/null; }
+agents()   { pgrep -f 'video-downloader-ultra-host --agent' 2>/dev/null; }
+shims()    { pgrep -f 'video-downloader-ultra-host chrome-extension' 2>/dev/null; }
 shells()   { pgrep -f 'quickshell -n -p /usr/share/omarchy/shell' 2>/dev/null; }
 
 idle_mode() {
@@ -117,13 +117,13 @@ tid_cpu_delta() {
 
 spawns_mode() {
   local seconds=$1 t n total=0 prev
-  printf 'Sampling omarchy-shell najm.osd "show" spawns for %ss (1 sample/s):\n' "$seconds"
+  printf 'Sampling omarchy-shell najmalzorqah.video-downloader-ultra.osd "show" spawns for %ss (1 sample/s):\n' "$seconds"
   # pgrep -fc prints the count; on this procps it emits "0" yet returns exit 1,
   # so take just the first token — the ||echo 0 fallback is not needed.
-  prev=$(pgrep -fc 'omarchy-shell -q najm.osd show' 2>/dev/null)
+  prev=$(pgrep -fc 'omarchy-shell -q najmalzorqah.video-downloader-ultra.osd show' 2>/dev/null)
   prev=${prev%%$'\n'*}
   for ((t = 0; t < seconds; t++)); do
-    n=$(pgrep -fc 'omarchy-shell -q najm.osd show' 2>/dev/null); n=${n%%$'\n'*}
+    n=$(pgrep -fc 'omarchy-shell -q najmalzorqah.video-downloader-ultra.osd show' 2>/dev/null); n=${n%%$'\n'*}
     # A rise means new spawns happened between the two samples.
     [ "$n" -gt "$prev" ] 2>/dev/null && total=$((total + n - prev))
     prev=$n

@@ -7,7 +7,7 @@ touching changes what review will ask of you.
   widget and the download OSD. The root of this repository *is* the plugin, so a
   clone is already a working install.
 - **The extension**, under `extension/`. MV3, no build step, loaded unpacked.
-- **The host**, `host/najm-ytdlp-host`. A single-file stdlib-only Python program
+- **The host**, `host/video-downloader-ultra-host`. A single-file stdlib-only Python program
   in two parts: the shim the browser's native-messaging port talks to, and the
   long-lived agent daemon that owns the download queue.
 
@@ -24,7 +24,7 @@ exists:
 ```bash
 omarchy plugin validate .                          # plugin manifest and QML
 qmllint -I /usr/share/omarchy/shell Panel.qml Osd.qml
-python3 -m py_compile host/najm-ytdlp-host
+python3 -m py_compile host/video-downloader-ultra-host
 uv run --directory tools python make-icons.py      # regenerate extension icons
 tools/perf-check.sh [--seconds 15] [--spawns 60]   # sample agent/shim RSS and CPU
 ```
@@ -71,7 +71,7 @@ clever loses to boring even when it is shorter.
   `extension/defaults.js` and the widget's `Defaults.js`; `Formats.js` labels and
   `popup.js`. These are duplicated logic, and editing one side silently breaks
   the other.
-- **Never edit the installed clone** at `~/.config/omarchy/plugins/najm.downloads/`.
+- **Never edit the installed clone** at `~/.config/omarchy/plugins/najmalzorqah.video-downloader-ultra/`.
   It is git-managed by `omarchy plugin add`. Commit here, then
   `omarchy plugin update`.
 
@@ -87,7 +87,7 @@ fact rather than with more code:
 - `qs.Ui` and `qs.Commons` come from `/usr/share/omarchy/shell/`. They are not
   missing imports and not this repo's to change.
 - Stock `omarchy.osd` owns every system OSD (volume, brightness, media, monitor).
-  This project drives its own `najm.osd` panel kind and must never claim the
+  This project drives its own `najmalzorqah.video-downloader-ultra.osd` panel kind and must never claim the
   system target or add `omarchy.clonedFrom` to the manifest.
 - `extension/manifest.json` is **static and committed**; its SPKI `key` pins the
   extension id. Never regenerate it or change the key — a new key means a new id,

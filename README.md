@@ -1,4 +1,4 @@
-# Najm Downloader
+# Video Downloader Ultra
 
 yt-dlp downloads for the Omarchy bar: a browser extension that probes the video
 you are looking at, a shared queue that outlives the popup, and live progress in
@@ -13,8 +13,8 @@ the browser keeps running in the bar after you close it and both surfaces show
 the same list.
 
 <p align="center">
-  <a href="https://omarchyplugins.com/plugin.html?id=najm.downloads"><img alt="On omarchyplugins.com" src="https://img.shields.io/badge/omarchyplugins.com-listed-000000.svg"></a>
-  <a href="https://github.com/NajmAlzorqah/download-extension/tags"><img alt="Latest version" src="https://img.shields.io/badge/version-1.1.0-purple.svg"></a>
+  <a href="https://omarchyplugins.com/plugin.html?id=najmalzorqah.video-downloader-ultra"><img alt="On omarchyplugins.com" src="https://img.shields.io/badge/omarchyplugins.com-listed-000000.svg"></a>
+  <a href="https://github.com/NajmAlzorqah/video-downloader-ultra/tags"><img alt="Latest version" src="https://img.shields.io/badge/version-1.1.0-purple.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
 </p>
 
@@ -78,7 +78,7 @@ popup rather than failing silently.
 ## Requirements
 
 - An Omarchy desktop (Quickshell based). The widget, the OSD and live theming
-  all live there. Set `NDLP_NO_OMARCHY=1` to run the host without the shell.
+  all live there. Set `VDU_NO_OMARCHY=1` to run the host without the shell.
 - `yt-dlp` and `ffmpeg` at `/usr/bin`. The host hardcodes those paths;
   `install.sh` will try `omarchy-pkg-add` for you if either is missing.
 - `python3`, `sha256sum` and `base64`.
@@ -92,8 +92,8 @@ popup rather than failing silently.
 `omarchy plugin add` runs no plugin scripts, so installation is two steps:
 
 ```bash
-omarchy plugin add https://github.com/NajmAlzorqah/download-extension.git --enable
-# then click the Najm Downloader widget in the bar (it installs the browser side)
+omarchy plugin add https://github.com/NajmAlzorqah/video-downloader-ultra.git --enable
+# then click the Video Downloader Ultra widget in the bar (it installs the browser side)
 ```
 
 The widget's first click runs `install.sh`, streams its output, and flips to the
@@ -121,7 +121,7 @@ group so a mid-download yt-dlp is not orphaned, both runtime dirs, the removal
 watcher, and the marker. Downloads are untouched, and `./install.sh` brings it
 all back.
 
-Removing the plugin itself is `omarchy plugin remove najm.downloads --yes`. That
+Removing the plugin itself is `omarchy plugin remove najmalzorqah.video-downloader-ultra --yes`. That
 runs no scripts, so `install.sh` also arms a systemd path watcher that cleans up
 the browser side once the plugin directory is really gone. A reinstall therefore
 starts fresh, while plugin updates and installs served from your own dev
@@ -154,7 +154,7 @@ after 120 seconds with nothing to do.
 The Omarchy bar widget is a second client on that same socket, so a job started
 in the popup renders live in the bar and the other way round. Progress is
 OSD-only: the host builds the card and sends it to this plugin's own panel over
-the `najm.osd` IPC target, leaving stock `omarchy.osd` free for the system's
+the `najmalzorqah.video-downloader-ultra.osd` IPC target, leaving stock `omarchy.osd` free for the system's
 volume, brightness and media OSDs. Theming round-trips through the host too,
 which reads `~/.local/state/omarchy/current/theme/` read-only and hands the
 palette to the popup as CSS variables.
@@ -177,7 +177,7 @@ Every command builds its arguments as an array instead of a shell string:
 - `/usr/bin/yt-dlp`: probes and downloads. Options end with `--`, so a URL can
   never be read as a flag.
 - `/usr/bin/ffmpeg`: merges separate video and audio streams.
-- `omarchy-shell -q najm.osd show <json>` / `close`: the download progress card.
+- `omarchy-shell -q najmalzorqah.video-downloader-ultra.osd show <json>` / `close`: the download progress card.
 - `omarchy-notification-send`: end-of-download, error and batch toasts, falling
   back to `notify-send`.
 - `hyprctl` and `fc-match`: theme lookup, array argv with a 3 second timeout.
@@ -193,18 +193,18 @@ shell.
 ## Troubleshooting
 
 - **Extension missing from the toolbar** after a restart: `chrome://extensions`
-  needs to show "Najm Downloader". Re-run `./install.sh` and restart again.
+  needs to show "Video Downloader Ultra". Re-run `./install.sh` and restart again.
 - **Popup header's connection label reads `offline` or `reload needed`**:
   `getTheme` failed, or the service worker is stale. A reload from
   `chrome://extensions` or a full browser quit fixes it; service-worker changes
-  need the filename bumped (`background-6.js`).
+  need the filename bumped (`background-7.js`).
 - **`Could not establish connection. Receiving end does not exist.`**: the
   service worker is not answering, usually the stale worker above. A reload or
   restart fixes it; no code change does.
 - **Red host status dot**: the native host was not found. Check that
-  `com.najm.ytdlp.json` exists in the browser's `NativeMessagingHosts`, and that
+  `com.najmalzorqah.video_downloader_ultra.json` exists in the browser's `NativeMessagingHosts`, and that
   `path` and `allowed_origins` are right after a browser restart.
-- **A `--load-extension` edit that backfires**: restore the `.najm-bak` backup.
+- **A `--load-extension` edit that backfires**: restore the `.video-downloader-ultra-bak` backup.
 - **Headless or custom `--user-data-dir` runs**: host manifests live inside the
   profile's `NativeMessagingHosts/`, not `~/.config/…`.
 
@@ -215,7 +215,7 @@ There is no test or lint infrastructure to run. Validation:
 ```bash
 omarchy plugin validate .                                  # plugin manifest and QML
 qmllint -I /usr/share/omarchy/shell Panel.qml Osd.qml
-python3 -m py_compile host/najm-ytdlp-host
+python3 -m py_compile host/video-downloader-ultra-host
 uv run --directory tools python make-icons.py              # regenerate icons
 tools/perf-check.sh [--seconds 15] [--spawns 60]           # sample agent/shim RSS+CPU
 ```

@@ -1,9 +1,9 @@
-// Panel kind of the najm.downloads plugin — derived from the Omarchy stock
+// Panel kind of the najmalzorqah.video-downloader-ultra plugin — derived from the Omarchy stock
 // `omarchy.osd` panel (Copyright (c) David Heinemeier Hansson, MIT License;
 // see CREDITS.md in the project root). Additions on the Omarchy base: the
 // stacked title-over-bar download layout (readout column), and the
 // click-to-dismiss card. Both this file and OsdModel.js are distributed under
-// the MIT License. The IPC target stays "najm.osd" so the host's OSD calls
+// the MIT License. The IPC target stays "najmalzorqah.video-downloader-ultra.osd" so the host's OSD calls
 // are unchanged.
 import QtQuick
 import Quickshell
@@ -117,7 +117,7 @@ Item {
         // Payload-shape drift between the host and this panel — log it so an
         // Omarchy/host update that changes the IPC is visible instead of
         // silently misrendering. Rendering still proceeds (best effort).
-        console.warn("najm.osd: ipc mismatch — payload ipc=" + ipc +
+        console.warn("najmalzorqah.video-downloader-ultra.osd: ipc mismatch — payload ipc=" + ipc +
                      " iface_version=" + (isNaN(iv) ? "none" : iv) +
                      ", panel wants " + OsdModel.OSD_IPC_TAG + " v" + OsdModel.OSD_IPC_VERSION)
       }
@@ -185,7 +185,7 @@ Item {
   }
 
   IpcHandler {
-    target: "najm.osd"
+    target: "najmalzorqah.video-downloader-ultra.osd"
     function show(payloadJson: string): string {
       root.open(payloadJson)
       return "ok"
@@ -200,7 +200,7 @@ Item {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "najm-osd"
+    WlrLayershell.namespace: "najmalzorqah-video-downloader-ultra-osd"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore

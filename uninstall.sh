@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Uninstall Najm Downloader's browser side, marker-driven.
+# Uninstall Video Downloader Ultra's browser side, marker-driven.
 #
 # This script acts on what install.sh recorded in the setup marker
-# (~/.local/state/najm-downloads/installed.json), NOT on its own directory:
+# (~/.local/state/najmalzorqah.video-downloader-ultra/installed.json), NOT on its own directory:
 # strip the recorded extension dir from the recorded flags confs (preserving
 # other tools' entries), remove the recorded NativeMessagingHosts manifests,
 # stop the agent process group, drop the runtime dirs, and remove the setup
@@ -20,10 +20,10 @@
 #                      whose dir is still present, is never touched).
 set -euo pipefail
 
-STATE_DIR="$HOME/.local/state/najm-downloads"
+STATE_DIR="$HOME/.local/state/najmalzorqah.video-downloader-ultra"
 MARKER="$STATE_DIR/installed.json"
 UNINSTALL_COPY="$STATE_DIR/uninstall.sh"
-MANIFEST_NAME="com.najm.ytdlp.json"
+MANIFEST_NAME="com.najmalzorqah.video_downloader_ultra.json"
 USER_NAME="${USER:-$(id -un)}"
 
 marker_field() {
@@ -49,7 +49,7 @@ except Exception: print("")' "$MARKER" 2>/dev/null || true)"
   [[ -n "$installed_from" && -d "$installed_from" ]] && exit 0
 fi
 
-echo "Najm Downloader uninstall (marker-driven at $MARKER)"
+echo "Video Downloader Ultra uninstall (marker-driven at $MARKER)"
 
 # ----------------------------------------------------- NativeMessaging hosts
 # Only the profile dirs the marker recorded from the last install.
@@ -67,7 +67,7 @@ done
 
 # ------------------------------------------------------------ flags strip
 # Strip EXT_DIR from the recorded confs. Always in place — never restore a
-# .najm-bak wholesale, or flags other tools added after install would be lost.
+# .video-downloader-ultra-bak wholesale, or flags other tools added after install would be lost.
 strip_flags() {
   local file="$1"
   [[ -f "$file" ]] || return 0
@@ -86,8 +86,8 @@ strip_flags() {
     "$file"
   sed -i '/^[[:space:]]*$/d' "$file"
   echo "stripped $EXT_DIR from $file"
-  if [[ -f "${file}.najm-bak" ]]; then
-    echo "  backup kept at ${file}.najm-bak"
+  if [[ -f "${file}.video-downloader-ultra-bak" ]]; then
+    echo "  backup kept at ${file}.video-downloader-ultra-bak"
   fi
 }
 if [[ -n "$EXT_DIR" ]]; then
@@ -104,7 +104,7 @@ fi
 # yt-dlp it spawned mid-download (which would keep writing to the downloads
 # dir). Kill the whole group. pgid guards make `kill -- -1` (all processes)
 # impossible. Remove the runtime dirs at both socket fallback locations.
-for _pid in $(pgrep -u "$USER_NAME" -f "najm-ytdlp-host.*--agent" 2>/dev/null || true); do
+for _pid in $(pgrep -u "$USER_NAME" -f "video-downloader-ultra-host.*--agent" 2>/dev/null || true); do
   _pgid="$(ps -o pgid= -p "$_pid" 2>/dev/null | tr -d ' ' || true)"
   if [[ -n "$_pgid" && "$_pgid" != "1" && "$_pgid" != "$$" ]]; then
     kill -TERM -- "-$_pgid" 2>/dev/null || true
@@ -113,17 +113,17 @@ for _pid in $(pgrep -u "$USER_NAME" -f "najm-ytdlp-host.*--agent" 2>/dev/null ||
 done
 unset _pid _pgid
 
-rm -rf "${XDG_RUNTIME_DIR:-$HOME/.local/state}/najm-ytdlp" "$HOME/.local/state/najm-ytdlp"
+rm -rf "${XDG_RUNTIME_DIR:-$HOME/.local/state}/najmalzorqah.video-downloader-ultra" "$HOME/.local/state/najmalzorqah.video-downloader-ultra"
 
 # -------------------------------------------------------- watcher teardown
 # Uninstall disarms the path watcher it armed: stop/disable before deleting
 # unit files, then reload. Explicitly not run through a failing verifier — the
 # whole block is best-effort so uninstall still succeeds without systemd.
 if systemctl --user show-environment >/dev/null 2>&1; then
-  systemctl --user stop najm-downloads-watch.path 2>/dev/null || true
-  systemctl --user disable najm-downloads-watch.path 2>/dev/null || true
-  rm -f "$HOME/.config/systemd/user/najm-downloads-watch.path" \
-        "$HOME/.config/systemd/user/najm-downloads-cleanup.service"
+  systemctl --user stop najmalzorqah.video-downloader-ultra-watch.path 2>/dev/null || true
+  systemctl --user disable najmalzorqah.video-downloader-ultra-watch.path 2>/dev/null || true
+  rm -f "$HOME/.config/systemd/user/najmalzorqah.video-downloader-ultra-watch.path" \
+        "$HOME/.config/systemd/user/najmalzorqah.video-downloader-ultra-cleanup.service"
   systemctl --user daemon-reload 2>/dev/null || true
 fi
 
@@ -132,5 +132,5 @@ rm -f "$UNINSTALL_COPY" "$MARKER"
 rmdir "$STATE_DIR" 2>/dev/null || true
 
 echo
-echo "Najm Downloader uninstalled. Restart the browsers to unload the extension."
+echo "Video Downloader Ultra uninstalled. Restart the browsers to unload the extension."
 echo "The extension id stays pinned to the committed key; re-install with install.sh."

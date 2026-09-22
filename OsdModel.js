@@ -7,7 +7,7 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value))
 }
 
-// OSD IPC contract version, mirrored from host/najm-ytdlp-host (OSD_IPC_*).
+// OSD IPC contract version, mirrored from host/video-downloader-ultra-host (OSD_IPC_*).
 // `open()` in Osd.qml warns on mismatch so a payload-shape change is visible at
 // dev time instead of silently misrendering. Keep in sync with the host.
 var OSD_IPC_TAG = "nd-osd-1"

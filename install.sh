@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install Najm Downloader's browser side.
+# Install Video Downloader Ultra's browser side.
 #
 # This is the repo-root Omarchy plugin installer: it registers the native
 # yt-dlp host into every Chromium-family profile on the machine, merges
@@ -11,17 +11,18 @@
 # its first click (install.sh resolves its own root, so it works identically
 # from a checkout and from the installed plugin dir). Idempotent - safe to
 # re-run whenever a new browser profile appears. The flags files always carry
-# exactly one Najm extension path: any previously configured path to a
-# different checkout (same extension name) is dropped in favour of this one.
+# exactly one Video Downloader Ultra extension path: any previously configured
+# path to a different checkout (same extension name) is dropped in favour of
+# this one.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-HOST="$ROOT/host/najm-ytdlp-host"
+HOST="$ROOT/host/video-downloader-ultra-host"
 EXT_DIR="$ROOT/extension"
 MANIFEST="$EXT_DIR/manifest.json"
-NATIVE_TPL="$ROOT/host/com.najm.ytdlp.json.tpl"
-MANIFEST_NAME="com.najm.ytdlp.json"
-STATE_DIR="$HOME/.local/state/najm-downloads"
+NATIVE_TPL="$ROOT/host/com.najmalzorqah.video_downloader_ultra.json.tpl"
+MANIFEST_NAME="com.najmalzorqah.video_downloader_ultra.json"
+STATE_DIR="$HOME/.local/state/najmalzorqah.video-downloader-ultra"
 MARKER="$STATE_DIR/installed.json"
 
 # Journal fields: which checkout the browser side is served from and at which
@@ -97,9 +98,9 @@ done
 
 # ------------------------------------------------------------- flags merge
 # Adds EXT_DIR to --load-extension= in every flags conf. Idempotent: leaves
-# the entry alone when EXT_DIR is already listed, and drops any OTHER Najm
-# Downloader checkout path so a line never carries two. The work happens in
-# python (already required for the marker) to avoid sed fragility with
+# the entry alone when EXT_DIR is already listed, and drops any OTHER Video
+# Downloader Ultra checkout path so a line never carries two. The work happens
+# in python (already required for the marker) to avoid sed fragility with
 # comma-separated values and other flags on the same line.
 CORE_ARG="$(IFS=,; echo "${CORE_CONFS[*]}")"
 python3 - "$EXT_DIR" "$CORE_ARG" "${FLAGS_CONFS[@]}" <<'PY'
@@ -110,7 +111,7 @@ core = set(x for x in sys.argv[2].split(",") if x)
 confs = sys.argv[3:]
 home = os.environ.get("HOME", "")
 
-def is_other_najm(p):
+def is_other_vdu(p):
     if p == ext:
         return False
     m = os.path.join(p, "manifest.json")
@@ -118,7 +119,7 @@ def is_other_najm(p):
         return False
     try:
         with open(m, encoding="utf-8", errors="replace") as f:
-            return '"Najm Downloader"' in f.read(4096)
+            return '"Video Downloader Ultra"' in f.read(4096)
     except OSError:
         return False
 
@@ -138,8 +139,8 @@ def update(filepath, create):
         parts = [p for p in m.group(2).split(",") if p]
         keep = []
         for p in parts:
-            if is_other_najm(p):
-                print("  dropped previous najm path %s" % p)
+            if is_other_vdu(p):
+                print("  dropped previous extension path %s" % p)
                 changed = True
             else:
                 keep.append(p)
@@ -157,7 +158,7 @@ def update(filepath, create):
             return changed, lines
     if changed:
         if os.path.exists(filepath):
-            os.replace(filepath, filepath + ".najm-bak")
+            os.replace(filepath, filepath + ".video-downloader-ultra-bak")
         with open(filepath, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
     return changed, lines
@@ -263,27 +264,27 @@ chmod +x "$STATE_DIR/uninstall.sh"
 if systemctl --user show-environment >/dev/null 2>&1; then
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
-  cat > "$UNIT_DIR/najm-downloads-cleanup.service" <<EOF
+  cat > "$UNIT_DIR/najmalzorqah.video-downloader-ultra-cleanup.service" <<EOF
 [Unit]
-Description=Clean up Najm Downloader browser side when the plugin clone is removed
+Description=Clean up Video Downloader Ultra browser side when the plugin clone is removed
 
 [Service]
 Type=oneshot
-ExecStart=%h/.local/state/najm-downloads/uninstall.sh --if-plugin-gone
+ExecStart=%h/.local/state/najmalzorqah.video-downloader-ultra/uninstall.sh --if-plugin-gone
 EOF
-  cat > "$UNIT_DIR/najm-downloads-watch.path" <<EOF
+  cat > "$UNIT_DIR/najmalzorqah.video-downloader-ultra-watch.path" <<EOF
 [Unit]
-Description=Watch the Omarchy plugins dir for Najm Downloader removal
+Description=Watch the Omarchy plugins dir for Video Downloader Ultra removal
 
 [Path]
 PathChanged=%h/.config/omarchy/plugins/
-Unit=najm-downloads-cleanup.service
+Unit=najmalzorqah.video-downloader-ultra-cleanup.service
 
 [Install]
 WantedBy=default.target
 EOF
   if systemctl --user daemon-reload >/dev/null 2>&1 &&
-     systemctl --user enable --now najm-downloads-watch.path >/dev/null 2>&1; then
+     systemctl --user enable --now najmalzorqah.video-downloader-ultra-watch.path >/dev/null 2>&1; then
     echo "watcher  -> omarchy plugin remove now uninstalls the browser side too"
   else
     echo "warn     could not arm the systemd path watcher — a plugin removal"
@@ -296,7 +297,7 @@ fi
 
 # ---------------------------------------------------------------- summary
 echo
-echo "Najm Downloader installed."
+echo "Video Downloader Ultra installed."
 echo "  extension dir : $EXT_DIR"
 echo "  extension id  : $ID"
 echo "  profiles      : $(IFS=', '; echo "${written[*]}")"

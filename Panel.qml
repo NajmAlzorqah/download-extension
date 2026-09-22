@@ -7,10 +7,10 @@ import qs.Ui
 import "Client.js" as Client
 import "Formats.js" as Formats
 
-// najm.downloads — shared-queue monitor for the yt-dlp agent daemon.
+// najmalzorqah.video-downloader-ultra — shared-queue monitor for the yt-dlp agent daemon.
 //
 // The browser extension popup owns URL probing and download initiation; this
-// widget is a second socket client (host/najm-ytdlp-host --agent) that only
+// widget is a second socket client (host/video-downloader-ultra-host --agent) that only
 // watches the shared queue: it pings for host liveness, listens for the
 // queue/progress broadcasts, and lets you cancel/pause/resume the active job
 // or reorder/remove waiting items. If the agent socket is missing it lazy-
@@ -22,8 +22,8 @@ import "Formats.js" as Formats
 // runnable by hand).
 Panel {
   id: root
-  moduleName: "najm.downloads"
-  ipcTarget: "najm.downloads"
+  moduleName: "najmalzorqah.video-downloader-ultra"
+  ipcTarget: "najmalzorqah.video-downloader-ultra"
 
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
@@ -76,7 +76,7 @@ Panel {
   // `omarchy plugin add` clones + validates the manifest but runs no scripts,
   // so the browser extension + native host must be installed by the user:
   // until the bundled install.sh has written its marker to
-  // ~/.local/state/najm-downloads/installed.json the widget shows a setup
+  // ~/.local/state/najmalzorqah.video-downloader-ultra/installed.json the widget shows a setup
   // pane that streams that script's output, then flips to the monitor view.
   property bool installed: false
   property var installedProfiles: []
@@ -122,9 +122,9 @@ Panel {
   }
 
   readonly property string homeDir: String(Quickshell.env("HOME") || "")
-  readonly property string pluginDir: root.homeDir + "/.config/omarchy/plugins/najm.downloads"
+  readonly property string pluginDir: root.homeDir + "/.config/omarchy/plugins/najmalzorqah.video-downloader-ultra"
   readonly property string setupScript: root.pluginDir + "/install.sh"
-  readonly property string setupMarker: root.homeDir + "/.local/state/najm-downloads/installed.json"
+  readonly property string setupMarker: root.homeDir + "/.local/state/najmalzorqah.video-downloader-ultra/installed.json"
 
   function appendSetupLog(line) {
     var s = String(line || "").replace(/\s+$/, "")
@@ -223,8 +223,8 @@ Panel {
   // --- agent discovery + lazy spawn --------------------------------
 
   readonly property var manifestCandidates: [
-    String(Quickshell.env("HOME") || "") + "/.config/chromium/NativeMessagingHosts/com.najm.ytdlp.json",
-    String(Quickshell.env("HOME") || "") + "/.config/BraveSoftware/Brave-Origin/NativeMessagingHosts/com.najm.ytdlp.json"
+    String(Quickshell.env("HOME") || "") + "/.config/chromium/NativeMessagingHosts/com.najmalzorqah.video_downloader_ultra.json",
+    String(Quickshell.env("HOME") || "") + "/.config/BraveSoftware/Brave-Origin/NativeMessagingHosts/com.najmalzorqah.video_downloader_ultra.json"
   ]
   property int manifestIndex: 0
   property int lastSpawnAt: 0
@@ -602,7 +602,7 @@ Panel {
     fixedWidth: vertical ? -1 : Math.round(Style.space(120))
     fixedHeight: vertical ? Math.round(Style.space(120)) : -1
     tooltipText: root.setupNeeded
-      ? "Najm Downloader — setup needed (open for install)"
+      ? "Video Downloader Ultra — setup needed (open for install)"
       : "Downloads · " + root.statusText
     onPressed: function(btn) {
       if (btn === Qt.LeftButton) root.toggle()
@@ -753,7 +753,7 @@ Panel {
         font.pixelSize: Style.font.title
         font.bold: true
         textFormat: Text.PlainText
-        text: "Najm Downloader"
+        text: "Video Downloader Ultra"
         color: Color.popups.text
       }
       Text {
@@ -807,7 +807,7 @@ Panel {
           wrapMode: Text.Wrap
           text: root.setupExitCode !== 0 && root.setupLog !== "" && !root.setupRunning
             ? "Setup finished with an error — the log below shows what happened."
-            : "This widget watches the shared download queue; the Najm Downloader " +
+            : "This widget watches the shared download queue; the Video Downloader Ultra " +
               "browser extension (and its yt-dlp native host) drives it. Install the " +
               "extension + host now, then restart the installed browsers so they load it."
           color: Qt.darker(Color.popups.text, 1.5)

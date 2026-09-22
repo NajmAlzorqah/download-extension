@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "id": "najm.downloads",
-  "name": "Najm Downloader",
+  "id": "najmalzorqah.video-downloader-ultra",
+  "name": "Video Downloader Ultra",
   "version": "1.1.0",
   "author": "Najm",
   "license": "MIT",
-  "description": "yt-dlp downloads with a shared queue, browser extension + native host, and a live progress OSD. The plugin mirrors the download queue from the Najm Downloader browser extension; the first click installs the extension and host into your Chromium-family browsers.",
+  "description": "yt-dlp downloads with a shared queue, browser extension + native host, and a live progress OSD. The plugin mirrors the download queue from the Video Downloader Ultra browser extension; the first click installs the extension and host into your Chromium-family browsers.",
   "kinds": ["bar-widget", "panel"],
   "entryPoints": {
     "barWidget": "Panel.qml",
@@ -13,7 +13,7 @@
   },
   "keepLoaded": true,
   "barWidget": {
-    "displayName": "Najm Downloader",
+    "displayName": "Video Downloader Ultra",
     "description": "yt-dlp downloads, shared queue with the browser extension, progress OSD",
     "category": "System",
     "allowMultiple": false,

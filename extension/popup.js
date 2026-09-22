@@ -46,7 +46,7 @@ function send(msg) {
 const SW_GONE_RE = window.SW_GONE_RE;
 const SW_GONE_MSG =
   window.SW_GONE_DIAG ||
-  "The extension's background worker isn't responding. Open chrome://extensions, reload Najm Downloader, then try again.";
+  "The extension's background worker isn't responding. Open chrome://extensions, reload Video Downloader Ultra, then try again.";
 function swGone(message) {
   return SW_GONE_RE.test(String(message || ""));
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Najm Downloader toolbar/extension icons as PNGs.
+"""Generate the Video Downloader Ultra toolbar/extension icons as PNGs.
 
 Dependency-free: draws a rounded terracotta square (a warm brand accent of its
 own — the popup's accent is driven by the live Omarchy theme, so this literal

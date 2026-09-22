@@ -1,17 +1,17 @@
-// Client.js — socket protocol helpers for najm.downloads.
+// Client.js — socket protocol helpers for najmalzorqah.video-downloader-ultra.
 //
 // Mirrors the JSON-lines contract of the shared host daemon
-// (host/najm-ytdlp-host in --agent mode). The widget is just another client:
+// (host/video-downloader-ultra-host in --agent mode). The widget is just another client:
 // requests carry a per-originator `req`, replies echo it, and req-less
 // `queue`/`progress` events are broadcast to every client. Keep these in sync
 // with the host's AGENT_SOCK_* constants and dispatch.
 
 function socketDir(runtimeDir, stateDir) {
   var base = runtimeDir || stateDir || "/tmp"
-  return base + "/najm-ytdlp"
+  return base + "/najmalzorqah.video-downloader-ultra"
 }
 
-// Widget prefs live in ~/.local/state/najm-downloads/ (persistent, unlike the
+// Widget prefs live in ~/.local/state/najmalzorqah.video-downloader-ultra/ (persistent, unlike the
 // runtime-dir socket). Mirrors where the host keeps theme state.
 function socketPath(runtimeDir, stateDir) {
   return socketDir(runtimeDir, stateDir) + "/agent.sock"

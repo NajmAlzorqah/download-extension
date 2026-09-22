@@ -1,4 +1,4 @@
-# Najm Downloader credits
+# Video Downloader Ultra credits
 
 This project is original code under the MIT License — see [LICENSE](LICENSE) for
 the terms and the copyright line. The work below is the exception: one of them
@@ -20,7 +20,7 @@ runs as separate processes. Each is credited with the licence it carries.
 `Osd.qml` and `OsdModel.js` are derived from the stock `omarchy.osd` plugin that
 Omarchy ships. The additions on top of that base are the stacked
 title-over-bar download layout with its readout column, and the click-to-dismiss
-card; the IPC target stays `najm.osd` so the host's OSD calls are unchanged. The
+card; the IPC target stays `najmalzorqah.video-downloader-ultra.osd` so the host's OSD calls are unchanged. The
 base work is reproduced under the following license:
 
 ```

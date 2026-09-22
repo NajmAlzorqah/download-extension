@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Chromium/Brave extension + local yt-dlp native host, shipped as an **Omarchy
-plugin**: the repo root is the plugin (bar-widget `najm.downloads` + the `panel`
+plugin**: the repo root is the plugin (bar-widget `najmalzorqah.video-downloader-ultra` + the `panel`
 kind that renders the download OSD), installable with `omarchy plugin add
 <git-url> --enable`. Because `omarchy plugin add` runs no plugin scripts, the
 widget's first click runs `install.sh` (browser side) and streams its output;
@@ -18,26 +18,26 @@ Omarchy theme via the host's read-only `theme` action).
 
 | Path | Role |
 |---|---|
-| `manifest.json` | Omarchy plugin manifest — one plugin, two `kinds`: bar-widget `Panel.qml` + panel `Osd.qml` (OSD IPC target `najm.osd`, host-compatible) |
+| `manifest.json` | Omarchy plugin manifest — one plugin, two `kinds`: bar-widget `Panel.qml` + panel `Osd.qml` (OSD IPC target `najmalzorqah.video-downloader-ultra.osd`, host-compatible) |
 | `Panel.qml` | bar-widget: shared queue monitor + first-click setup pane (installs the browser side until the marker exists) |
 | `Client.js` `Formats.js` `Defaults.js` | widget JS (agent-socket client, probe-option helpers ported from `popup.js`) |
 | `Osd.qml` `OsdModel.js` | panel kind: stacked title-over-bar progress OSD (derived from stock `omarchy.osd`, MIT; see CREDITS.md) |
 | `extension/` | MV3 extension (no build step; loaded unpacked from the installed plugin's `extension/`) |
 | `extension/manifest.json` | static, committed — its SPKI `key` pins the extension id (no private key exists) |
-| `extension/background-6.js` | owns the native port (drops it when idle — ~300ms after the last host reply so a request's follow-up `queue` broadcast always lands before the close — letting the shim exit + the SW can suspend; re-adopts the agent's queue after an unexpected drop), routes messages + the download queue, 200s probe timeout, ~4s `theme` cache (filename is versioned — see Gotchas) |
+| `extension/background-7.js` | owns the native port (drops it when idle — ~300ms after the last host reply so a request's follow-up `queue` broadcast always lands before the close — letting the shim exit + the SW can suspend; re-adopts the agent's queue after an unexpected drop), routes messages + the download queue, 200s probe timeout, ~4s `theme` cache (filename is versioned — see Gotchas) |
 | `extension/theme.js` | resolves the host's raw `theme` payload into CSS variables on `:root`; on `getTheme` failure it does **not** re-apply a palette — it labels the header's connection state `offline`/`reload needed` and records the reason in `data-theme-error` |
 | `extension/controls.js` | decorates native selects/checkboxes (custom dropdown + pill toggle) without touching `popup.js`/`options.js` logic |
 | `extension/defaults.js` | single canonical `DEFAULTS` map shared by `popup.js` and `options.js` (both write the same `chrome.storage.local` namespace — a second copy is how default values drift between pages) |
 | `extension/theme.css` | shared Omarchy design-system layer; `:root` holds the **single** Solitude fallback palette (first-paint/no-JS guard) plus layout tokens |
 | `extension/popup.{html,js,css}` | main UI; `popup.js` is the big file (~815 lines) |
 | `extension/options.{html,js,css}` | defaults via `chrome.storage.local` |
-| `host/najm-ytdlp-host` | single-file stdlib-only Python host with two modes: the default **shim** serves the browser's 4-byte LE length-prefixed JSON on stdio by relaying it to the JSON-lines **agent** daemon over a unix socket; `--agent` runs the long-lived daemon that owns the shared queue (see "Shared queue daemon") |
-| `host/com.najm.ytdlp.json.tpl` | NativeMessagingHosts manifest template (`@@HOST_PATH@@`, `@@EXT_ORIGIN@@`) |
+| `host/video-downloader-ultra-host` | single-file stdlib-only Python host with two modes: the default **shim** serves the browser's 4-byte LE length-prefixed JSON on stdio by relaying it to the JSON-lines **agent** daemon over a unix socket; `--agent` runs the long-lived daemon that owns the shared queue (see "Shared queue daemon") |
+| `host/com.najmalzorqah.video_downloader_ultra.json.tpl` | NativeMessagingHosts manifest template (`@@HOST_PATH@@`, `@@EXT_ORIGIN@@`) |
 | `host/browsers.sh` | single source of browser coverage for `install.sh`/`uninstall.sh`: canonical roots + conservative discovery (only registers a non-canonical Chromium-family root whose flags conf already exists — never invents paths) |
 | `install.sh` / `uninstall.sh` | register/deregister the browser side in the ten Chromium-family profiles; install.sh writes the marker the widget reads and arms the removal watcher; uninstall.sh is marker-driven (acts on `installed.json`, not its own dir — the state-dir copy install.sh refreshes is what the watcher runs) |
 | `tools/make-icons.py` | regenerates `extension/icons/*.png` |
-| `tools/perf-check.sh` | samples agent/shim/quickshell RSS + CPU over a window, or counts `najm.osd` "show" spawns — the measurement tool behind the OSD/theme perf fixes (see Commands) |
-| `~/.config/omarchy/plugins/najm.downloads/` | the installed clone of this repo (git-managed by `omarchy plugin add`; never edit in place — commit upstream and `omarchy plugin update`) |
+| `tools/perf-check.sh` | samples agent/shim/quickshell RSS + CPU over a window, or counts `najmalzorqah.video-downloader-ultra.osd` "show" spawns — the measurement tool behind the OSD/theme perf fixes (see Commands) |
+| `~/.config/omarchy/plugins/najmalzorqah.video-downloader-ultra/` | the installed clone of this repo (git-managed by `omarchy plugin add`; never edit in place — commit upstream and `omarchy plugin update`) |
 
 ## Commands
 
@@ -47,7 +47,7 @@ There is **no test, lint, or typecheck infrastructure** — don't hunt for one.
 omarchy plugin validate .                          # plugin manifest/QML validation
 omarchy plugin add <git-url> --enable              # install the plugin (clones the repo)
 qmllint -I /usr/share/omarchy/shell Panel.qml Osd.qml
-python3 -m py_compile host/najm-ytdlp-host         # only host syntax check that exists
+python3 -m py_compile host/video-downloader-ultra-host         # only host syntax check that exists
 ./install.sh                                      # browser side (widget first-click does this)
 ./uninstall.sh                                    # full cleanup, marker-driven
 ./uninstall.sh --if-plugin-gone                   # watcher mode: no-op unless installed_from dir is gone
@@ -73,7 +73,7 @@ A **service-worker change needs a reload or full browser quit** (see Gotchas) �
 the popup header showing `reload needed` is the tell-tale of a stale SW.
 Widget QML edits are hot-reloaded by the shell watcher, but a full
 `omarchy restart shell` is the reliable way to pick up `Panel.qml` changes
-(the OSD clone in `najm.osd/` needs one too — see Gotchas).
+(the OSD clone in `najmalzorqah.video-downloader-ultra.osd/` needs one too — see Gotchas).
 
 ## Shared queue daemon (`--agent`)
 
@@ -85,8 +85,8 @@ owns the actual download queue — it outlives every shim/browser session, which
 is what makes the queue shared between the extension popup and the widget, and
 persistent across popup/SW restarts.
 
-- Socket: `$XDG_RUNTIME_DIR/najm-ytdlp/agent.sock` (falls back to
-  `~/.local/state/najm-ytdlp/`), 0600, single-instance via
+- Socket: `$XDG_RUNTIME_DIR/najmalzorqah.video-downloader-ultra/agent.sock` (falls back to
+  `~/.local/state/najmalzorqah.video-downloader-ultra/`), 0600, single-instance via
   `create()/fcntl` lock + stale-socket-file cleanup (`bind_agent_socket()`).
   JSON-lines framing, up to `AGENT_MAX_CLIENTS` (8) simultaneous clients.
 - The agent is lazy-spawned (detached) by a shim when the socket is missing,
@@ -105,16 +105,16 @@ Driving the agent by hand (the shim's stdin framing, in case the socket is up):
 
 ```bash
 # agent mode needs the native-channel framing translated; easiest is the shim:
-python3 host/najm-ytdlp-host            # grabs a shim on this stdio, relays to socket
+python3 host/video-downloader-ultra-host            # grabs a shim on this stdio, relays to socket
 # or talk JSON-lines straight to the socket with a 3-line python client
 ```
 
 The `theme` action still works through the agent socket unchanged
-(`theme.js` → `background-6.js` → native port → shim → agent).
+(`theme.js` → `background-7.js` → native port → shim → agent).
 
 ## Theme pipeline (live Omarchy colors)
 
-`background-6.js` handles `getTheme` with a ~4s cache: it forwards the request
+`background-7.js` handles `getTheme` with a ~4s cache: it forwards the request
 over the native port; the host reads `~/.local/state/omarchy/current/theme/`
 (`colors.toml` + `shell.toml` + `theme.name`, plus the `~/.config/omarchy/
 shell.toml` machine overlay) and replies without ever invoking yt-dlp.
@@ -142,7 +142,7 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
   equal the JSON byte length — `{"action":"theme"}` is 18 = `\x12`, a wrong
   prefix reads short, fails to parse, and the host exits silently with no
   output):
-  `printf '\x12\x00\x00\x00{"action":"theme"}' | NDLP_NO_OMARCHY=1 ./host/najm-ytdlp-host`
+  `printf '\x12\x00\x00\x00{"action":"theme"}' | VDU_NO_OMARCHY=1 ./host/video-downloader-ultra-host`
 
 ## Gotchas
 
@@ -154,7 +154,7 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
   untouched.
 - **`omarchy plugin add` git-clones the repo** — plugin changes don't exist for
   new installs until they're committed and pushed; the installed clone at
-  `~/.config/omarchy/plugins/najm.downloads/` must stay clean (nothing writes
+  `~/.config/omarchy/plugins/najmalzorqah.video-downloader-ultra/` must stay clean (nothing writes
   into it — install.sh writes its marker to `~/.local/state/`), or
   `omarchy plugin update` refuses to fast-forward.
 - Extension JS/HTML changes need only an extension reload (unpacked);
@@ -162,7 +162,7 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
 - **Chromium caches MV3 service workers for `--load-extension` extensions and
   a window close can leave `chrome.exe`-style background processes that keep
   the stale worker alive.** The SW file is therefore versioned
-  (`background-6.js`, same trick as Omarchy's `copy-url`): bump the filename on
+  (`background-7.js`, same trick as Omarchy's `copy-url`): bump the filename on
   any SW logic change, then reload from `chrome://extensions` or fully quit the
   browser. Symptoms of a stale SW: every `runtime.sendMessage` fails with
   `Could not establish connection. Receiving end does not exist.` (shown as a
@@ -174,31 +174,31 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
 - **OSD/deps coupling is health-reported, not silent.** The host `ping` reply now
   carries additive `osd` (`unknown|ok|missing|broken`), `osdIssue`, and `deps`
   (`ytdlp`/`ffmpeg`/`omarchyShell`/`hyprctl`/`fcMatch`) fields — additive so the
-  browser classifiers (`Client.js` `isPingReply`, `background-6.js` ping state)
+  browser classifiers (`Client.js` `isPingReply`, `background-7.js` ping state)
   keep working. The widget's popup shows a warn row under the status line when
   the progress OSD is unreachable or an Omarchy dep checks out missing (an
-  Omarchy update that breaks `omarchy-shell -q najm.osd show|close` shows up
+  Omarchy update that breaks `omarchy-shell -q najmalzorqah.video-downloader-ultra.osd show|close` shows up
   there, not as a silent absence). OSD health is probed TTL-gated (60s) and only
   when a download is about to show a card, so nothing flickers at rest.
   The OSD payload carries `ipc: "nd-osd-1"` + `iface_version` which the panel
   (`OsdModel.js`) validates with a `console.warn` on mismatch. The Omarchy
   contract is version-dependent — re-verify it after any Omarchy update.
-- Headless / custom `--user-data-dir` runs expect `com.najm.ytdlp.json` inside
+- Headless / custom `--user-data-dir` runs expect `com.najmalzorqah.video_downloader_ultra.json` inside
   the profile's `NativeMessagingHosts/`, not `~/.config/...`.
-- Set `NDLP_NO_OMARCHY=1` when driving the host by hand to suppress the OSD
-  (`omarchy-shell -q najm.osd show/close`) and toasts
+- Set `VDU_NO_OMARCHY=1` when driving the host by hand to suppress the OSD
+  (`omarchy-shell -q najmalzorqah.video-downloader-ultra.osd show/close`) and toasts
   (`omarchy-notification-send`).
 - The download OSD's stacked title-over-bar layout comes from the **`panel`
   kind of this same plugin** (`Osd.qml`/`OsdModel.js`); stock `omarchy.osd` in
   `/usr/share/omarchy/shell/plugins/osd/` renders *either* a bar *or* a
   message. The two coexist: stock `omarchy.osd` is enabled and serves the
   whole system (volume/brightness/media/monitor OSDs keep their stock single-row
-  layout), while this project drives `najm.osd` **directly** — the merged
+  layout), while this project drives `najmalzorqah.video-downloader-ultra.osd` **directly** — the merged
   plugin's manifest carries **no `omarchy.clonedFrom`** (so
   `PluginRegistry.resolveEnabledId` never redirects system `omarchy.osd` summons
-  to it), the panel registers `IpcHandler { target: "najm.osd" }` and uses the
-  `najm-osd` layer-shell namespace. The host sends
-  `omarchy-shell -q najm.osd show <json>`/`close` instead of the `omarchy-osd`
+  to it), the panel registers `IpcHandler { target: "najmalzorqah.video-downloader-ultra.osd" }` and uses the
+  `najmalzorqah-video-downloader-ultra-osd` layer-shell namespace. The host sends
+  `omarchy-shell -q najmalzorqah.video-downloader-ultra.osd show <json>`/`close` instead of the `omarchy-osd`
   binary. Keep `OsdModel.js`'s `readout` field and `stacked`/bar logic in sync
   with what `osd_progress()` sends. Never edit the installed clone in place under
   `~/.config/omarchy/plugins/` (git-managed by `omarchy plugin add`; commit
@@ -209,7 +209,7 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
 
 ## Host security invariants (don't weaken when editing)
 
-Everything in `host/najm-ytdlp-host` is deliberately paranoid and must stay so:
+Everything in `host/video-downloader-ultra-host` is deliberately paranoid and must stay so:
 array argv (no shell), `--` ends yt-dlp options, output confined to the output
 dir via `realpath`, all echo strings stripped of ANSI/control chars, and
 whitelist-validated inputs (`RE_FMTID`, `RE_LANG`, `RE_INT`, `RE_SUB_ERROR`).
@@ -304,15 +304,15 @@ Omarchy's notification service write a new `~/.local/state/omarchy/
 notifications/history/` entry every tick, spamming the notification center.
 End-of-download toasts (`notify_done`/`notify_many`/`notify_error`) are
 unchanged and still fall back to `notify-send`; the progress OSD is
-Omarchy-only and absent when `NDLP_NO_OMARCHY`/no shell.
+Omarchy-only and absent when `VDU_NO_OMARCHY`/no shell.
 
 The stacked title-over-bar rendering comes from the **`panel` kind of this
-same plugin** (`Osd.qml`/`OsdModel.js`, IPC target `najm.osd`; see Gotchas) —
+same plugin** (`Osd.qml`/`OsdModel.js`, IPC target `najmalzorqah.video-downloader-ultra.osd`; see Gotchas) —
 stock Omarchy draws *either* a bar *or* a message, never both (`OsdModel.js`
 forced `hasProgress=false` whenever a message was passed). The host builds the
 OSD payload itself (`icon`, `message`, `value`, `progressText`, `max`,
 `duration`) and sends it straight to the clone via
-`omarchy-shell -q najm.osd show <json>`; stock `omarchy.osd` is untouched and
+`omarchy-shell -q najmalzorqah.video-downloader-ultra.osd show <json>`; stock `omarchy.osd` is untouched and
 keeps serving every system OSD (volume/brightness/media/monitor), so only
 downloads render the vertical clone. `_osd_refresh()` re-shows the OSD
 every ~2.5s (throttled), including during the subtitle lock probe's retry backoffs
@@ -350,7 +350,7 @@ cache is session-scoped and lost on browser restart/extension reload.
 
 ## Removal & update model
 
-`omarchy plugin remove najm.downloads` only disables the plugin and `rm -rf`s
+`omarchy plugin remove najmalzorqah.video-downloader-ultra` only disables the plugin and `rm -rf`s
 its clone (it runs no scripts), so the browser side must not live solely inside
 the plugin. The removal/update contract keeps a reinstall **guaranteed fresh**:
 
@@ -359,8 +359,8 @@ the plugin. The removal/update contract keeps a reinstall **guaranteed fresh**:
   `git rev-parse HEAD`, best-effort), plus `flags_confs` (the flags-conf names,
   since `profiles` — `~/.config`-relative dirs — don't map 1:1 to conf names).
 - **Removal watcher.** install.sh copies `uninstall.sh` to
-  `~/.local/state/najm-downloads/` and arms two systemd user units
-  (`najm-downloads-watch.path` → `najm-downloads-cleanup.service`). The path
+  `~/.local/state/najmalzorqah.video-downloader-ultra/` and arms two systemd user units
+  (`najmalzorqah.video-downloader-ultra-watch.path` → `najmalzorqah.video-downloader-ultra-cleanup.service`). The path
   unit watches `~/.config/omarchy/plugins/` with `PathChanged` — which fires on
   top-level add/remove (a plugin removal) but **not** on in-subdir git pulls,
   so updates land on the widget's self-heal, never on the watcher. The service
@@ -387,20 +387,20 @@ the plugin. The removal/update contract keeps a reinstall **guaranteed fresh**:
   `./uninstall.sh` (browser side + runtime) or `tools/omarchy-remove.sh`
   (the same, plus the plugin itself).
 
-## Widget (`najm.downloads`)
+## Widget (`najmalzorqah.video-downloader-ultra`)
 
 The bar-widget **is this repo** (`Panel.qml` at the root; the installed clone
-lives at `~/.config/omarchy/plugins/najm.downloads/`). It is a **second client
-of the same agent socket** (`$XDG_RUNTIME_DIR/najm-ytdlp/agent.sock`,
+lives at `~/.config/omarchy/plugins/najmalzorqah.video-downloader-ultra/`). It is a **second client
+of the same agent socket** (`$XDG_RUNTIME_DIR/najmalzorqah.video-downloader-ultra/agent.sock`,
 fallback `~/.local/state/…`). It shares the queue with the extension popup: a
 job started in one renders live in the other because `queue` snapshots and
 coarse `progress` broadcasts go to every client. It is *not* a re-implementation
-of `background-6.js` — it talks JSON-lines to the agent directly, with no
+of `background-7.js` — it talks JSON-lines to the agent directly, with no
 4-byte framing (that is shim-only).
 
 | File | Role |
 |---|---|
-| `manifest.json` | Omarchy plugin manifest (id `najm.downloads`, kinds `bar-widget` + `panel`) |
+| `manifest.json` | Omarchy plugin manifest (id `najmalzorqah.video-downloader-ultra`, kinds `bar-widget` + `panel`) |
 | `Panel.qml` | shared-queue monitor + first-click setup pane (installs the browser side until the marker exists): progress view, cancel/pause/resume the active job, queue reorder/remove, connection state, and the update self-heal (see Removal & update model). Only file with QML; hot-reloaded by the shell watcher, reliable pickup via `omarchy restart shell` |
 | `Client.js` | JSON-lines frame builders + reply classifiers mirroring the agent contract (keep in sync with the host's `AGENT_SOCK_*` / dispatch) |
 | `Formats.js` | probe-option helpers ported from `extension/popup.js` (see Parser coupling — `summarizeSelection`/labels must track popup.js) |
@@ -413,6 +413,6 @@ restarts without losing the queue it shares with the popup/SW.
 
 ## Toolchain coupling
 
-Keep JSON/message formats in sync with what `host/najm-ytdlp-host` actually
+Keep JSON/message formats in sync with what `host/video-downloader-ultra-host` actually
 parses; the toolchain depends on the host OS integration (Omarchy
 OSD/notifications).

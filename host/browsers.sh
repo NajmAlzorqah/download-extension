@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared browser coverage for Najm Downloader's install/uninstall.
+# Shared browser coverage for Video Downloader Ultra's install/uninstall.
 #
 # Sourced by install.sh and uninstall.sh (the previously duplicated NATIVE_DIRS
 # / FLAGS_CONFS lists drifted; this is the single source). Canonical roots are

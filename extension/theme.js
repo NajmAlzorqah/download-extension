@@ -28,7 +28,7 @@
   // of keeping a second, driftable copy of their own.
   const SW_GONE_RE = /Could not establish connection|Receiving end does not exist/;
   const SW_GONE_DIAG =
-    "The extension's background worker isn't responding. Open chrome://extensions, reload Najm Downloader, then try again.";
+    "The extension's background worker isn't responding. Open chrome://extensions, reload Video Downloader Ultra, then try again.";
 
   // Fallback tokens come from theme.css `:root` (the single palette source).
   // If a token resolves empty here, apply() leaves the CSS variable unset so
