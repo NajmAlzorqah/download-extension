@@ -181,9 +181,8 @@ shell.toml` machine overlay) and replies without ever invoking yt-dlp.
   there, not as a silent absence). OSD health is probed TTL-gated (60s) and only
   when a download is about to show a card, so nothing flickers at rest.
   The OSD payload carries `ipc: "nd-osd-1"` + `iface_version` which the panel
-  (`OsdModel.js`) validates with a `console.warn` on mismatch. **`docs/
-  omarchy-compat.md` is the compatibility pin** for the full Omarchy contract —
-  read it after any Omarchy update.
+  (`OsdModel.js`) validates with a `console.warn` on mismatch. The Omarchy
+  contract is version-dependent — re-verify it after any Omarchy update.
 - Headless / custom `--user-data-dir` runs expect `com.najm.ytdlp.json` inside
   the profile's `NativeMessagingHosts/`, not `~/.config/...`.
 - Set `NDLP_NO_OMARCHY=1` when driving the host by hand to suppress the OSD
@@ -409,9 +408,8 @@ download initiation. It reopens into the shared queue view and follows
 `queue` snapshots + coarse `progress` broadcasts, so it survives shell
 restarts without losing the queue it shares with the popup/SW.
 
-## Skills
+## Toolchain coupling
 
-Repo skills are vendored under `.agents/skills/` (pinned by `skills-lock.json`);
-`using-agent-skills` decides which applies. The toolchain depends on the host
-OS integration (Omarchy OSD/notifications) — keep JSON/message formats in sync
-with what `host/najm-ytdlp-host` actually parses.
+Keep JSON/message formats in sync with what `host/najm-ytdlp-host` actually
+parses; the toolchain depends on the host OS integration (Omarchy
+OSD/notifications).

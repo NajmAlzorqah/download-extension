@@ -116,7 +116,7 @@ OSD_ICON_FAIL = "󰅖"
 # validated by the panel's OsdModel.js (`open()`), so a payload-shape change is
 # visible at dev time instead of silently misrendering. Bump whenever the
 # payload fields or the `najm.osd` command shape change; the panel copy must
-# track this value (see docs/omarchy-compat.md).
+# track this value.
 OSD_IPC_VERSION = 1
 OSD_IPC_TAG = "nd-osd-%d" % OSD_IPC_VERSION
 

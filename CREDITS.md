@@ -1,8 +1,8 @@
 # Najm Downloader credits
 
 This project is original code under the MIT License — see [LICENSE](LICENSE) for
-the terms and the copyright line. The works below are the exception: two of them
-are incorporated into the source, and the rest are external programs the host
+the terms and the copyright line. The work below is the exception: one of them
+is incorporated into the source, and the rest are external programs the host
 runs as separate processes. Each is credited with the licence it carries.
 
 ## Summary
@@ -10,7 +10,6 @@ runs as separate processes. Each is credited with the licence it carries.
 | Work | Licence | How it is used here |
 | --- | --- | --- |
 | Omarchy `omarchy.osd` | MIT | Base of the `Osd.qml` panel kind |
-| addyosmani/agent-skills | MIT | Vendored verbatim under `.agents/skills/` |
 | yt-dlp | Unlicense | Invoked by the host, not bundled |
 | ffmpeg | LGPL / GPL | Invoked by the host, not bundled |
 | Quickshell | LGPL-3.0 | Imported module interfaces only |
@@ -48,37 +47,6 @@ SOFTWARE.
 
 Both files carry this provenance in a header comment — keep it intact when
 editing them.
-
-## addyosmani/agent-skills — vendored skills
-
-The agent skills under `.agents/skills/` are vendored from
-[addyosmani/agent-skills](https://github.com/addyosmani/agent-skills), pinned in
-`skills-lock.json` and reproduced verbatim. They are development tooling; no
-part of them ships in the plugin or the extension. Reproduced under:
-
-```
-MIT License
-
-Copyright (c) 2025 Addy Osmani
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-```
 
 ## Runtime software the host invokes
 

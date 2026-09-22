@@ -188,7 +188,7 @@ through, output is confined to the configured directory via `realpath`, and
 every echoed string is stripped of ANSI and control characters. Inputs are
 whitelist-validated at every boundary, and the theme can only ever produce
 `#hex` colors and safe-character values, so nothing from it reaches yt-dlp or a
-shell. See `docs/security-audit-2026-09-21.md` for the full audit.
+shell.
 
 ## Troubleshooting
 
@@ -221,10 +221,9 @@ tools/perf-check.sh [--seconds 15] [--spawns 60]           # sample agent/shim R
 ```
 
 The repository root is the Omarchy plugin itself, so a clone is already a
-working plugin. Architecture, IPC contracts and the Omarchy compatibility pin
-live in `AGENTS.md` and `docs/omarchy-compat.md`; contributions follow
-`CONTRIBUTING.md` (commit with a `Signed-off-by` trailer, the Developer
-Certificate of Origin).
+working plugin. Architecture and IPC contracts live in `AGENTS.md`;
+contributions follow `CONTRIBUTING.md` (commit with a `Signed-off-by` trailer,
+the Developer Certificate of Origin).
 
 ## Credits
 
@@ -236,9 +235,6 @@ Certificate of Origin).
   runtime the panels run on.
 - The Omarchy "Download Video" extension and native host, whose companion
   pattern, OSD glyphs and toast style this project matches.
-- Agent skills vendored under `.agents/skills/` come from
-  [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) (MIT,
-  © 2025 Addy Osmani).
 
 ## License
 
