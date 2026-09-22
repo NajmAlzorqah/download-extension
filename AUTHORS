@@ -1,9 +1,0 @@
-Najm Alzorqah <najmalzorqah@gmail.com> — main author, maintainer
-
-Derivative attribution:
-
-- `najm.osd` adopts the stock Omarchy `omarchy.osd` panel
-  (Copyright (c) David Heinemeier Hansson) under the MIT License — see
-  NOTICE.md.
-- `.agents/skills/` is vendored from addyosmani/agent-skills
-  (Copyright (c) 2025 Addy Osmani) under the MIT License — see NOTICE.md.

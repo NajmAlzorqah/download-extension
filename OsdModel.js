@@ -1,5 +1,5 @@
 // OsdModel.js — derived from the Omarchy stock `omarchy.osd` panel
-// (Copyright (c) David Heinemeier Hansson, MIT License; see NOTICE.md in the
+// (Copyright (c) David Heinemeier Hansson, MIT License; see CREDITS.md in the
 // project root). Additions on the Omarchy base: progress readout next to a
 // title message. Distributed under the MIT License.
 

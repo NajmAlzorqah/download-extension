@@ -1,6 +1,6 @@
 // Panel kind of the najm.downloads plugin — derived from the Omarchy stock
 // `omarchy.osd` panel (Copyright (c) David Heinemeier Hansson, MIT License;
-// see NOTICE.md in the project root). Additions on the Omarchy base: the
+// see CREDITS.md in the project root). Additions on the Omarchy base: the
 // stacked title-over-bar download layout (readout column), and the
 // click-to-dismiss card. Both this file and OsdModel.js are distributed under
 // the MIT License. The IPC target stays "najm.osd" so the host's OSD calls

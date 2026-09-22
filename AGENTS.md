@@ -21,7 +21,7 @@ Omarchy theme via the host's read-only `theme` action).
 | `manifest.json` | Omarchy plugin manifest — one plugin, two `kinds`: bar-widget `Panel.qml` + panel `Osd.qml` (OSD IPC target `najm.osd`, host-compatible) |
 | `Panel.qml` | bar-widget: shared queue monitor + first-click setup pane (installs the browser side until the marker exists) |
 | `Client.js` `Formats.js` `Defaults.js` | widget JS (agent-socket client, probe-option helpers ported from `popup.js`) |
-| `Osd.qml` `OsdModel.js` | panel kind: stacked title-over-bar progress OSD (derived from stock `omarchy.osd`, MIT; see NOTICE.md) |
+| `Osd.qml` `OsdModel.js` | panel kind: stacked title-over-bar progress OSD (derived from stock `omarchy.osd`, MIT; see CREDITS.md) |
 | `extension/` | MV3 extension (no build step; loaded unpacked from the installed plugin's `extension/`) |
 | `extension/manifest.json` | static, committed — its SPKI `key` pins the extension id (no private key exists) |
 | `extension/background-6.js` | owns the native port (drops it when idle — ~300ms after the last host reply so a request's follow-up `queue` broadcast always lands before the close — letting the shim exit + the SW can suspend; re-adopts the agent's queue after an unexpected drop), routes messages + the download queue, 200s probe timeout, ~4s `theme` cache (filename is versioned — see Gotchas) |
